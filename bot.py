@@ -24,7 +24,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 def find_price(text):
     """
-    Розуміє:
+    Розуміє формати:
     650€
     650 €
     650-25%
@@ -75,19 +75,23 @@ def find_discount(text):
 # -------------------------------------------------
 
 def find_brand(text):
+
     lines = [
         line.strip()
         for line in text.splitlines()
         if line.strip()
     ]
 
-    # Спочатку шукаємо hashtag
+    # Якщо бренд написаний як hashtag
     for line in lines:
+
         if line.startswith("#"):
+
             brand = line.split()[0]
+
             return clean_brand(brand)
 
-    # Потім шукаємо перший нормальний текстовий рядок
+    # Якщо hashtag немає — шукаємо назву бренду
     for line in lines:
 
         # пропускаємо рядки з ціною
@@ -98,11 +102,11 @@ def find_brand(text):
         if re.search(r"\d+\s*%", line):
             continue
 
-        # пропускаємо рядок, який складається тільки з чисел
+        # пропускаємо рядки тільки з числами
         if re.fullmatch(r"[\d\s./,-]+", line):
             continue
 
-        # пропускаємо очевидний рядок розмірів
+        # пропускаємо рядки з розмірами
         if is_size_line(line):
             continue
 
@@ -120,17 +124,30 @@ def find_brand(text):
 
 
 def clean_brand(brand):
+
     brand = brand.replace("#", "")
     brand = brand.lower()
 
-    # прибираємо emoji та спеціальні символи
-    brand = re.sub(r"[^a-zа-яіїєґ0-9\s&'-]", "", brand)
+    # залишаємо букви, цифри та пробіли
+    brand = re.sub(
+        r"[^a-zа-яіїєґ0-9\s&'-]",
+        "",
+        brand,
+    )
 
     # прибираємо & та апострофи
-    brand = re.sub(r"[&']", "", brand)
+    brand = re.sub(
+        r"[&']",
+        "",
+        brand,
+    )
 
-    # всі слова з'єднуємо
-    brand = re.sub(r"[\s-]+", "", brand)
+    # всі слова об'єднуємо
+    brand = re.sub(
+        r"[\s-]+",
+        "",
+        brand,
+    )
 
     return brand
 
@@ -157,16 +174,31 @@ def is_size_line(line):
     cleaned = line.upper().strip()
 
     # S. M. L. XL.
-    words = re.findall(r"[A-ZА-ЯІЇЄҐ]+", cleaned)
+    words = re.findall(
+        r"[A-ZА-ЯІЇЄҐ]+",
+        cleaned,
+    )
 
-    if words and all(word in SIZE_WORDS for word in words):
+    if words and all(
+        word in SIZE_WORDS
+        for word in words
+    ):
         return True
 
-    # 36 37 38 / 36/37/38
-    numbers = re.findall(r"\b\d{2}\b", cleaned)
+    # 36 37 38
+    # 36/37/38
+    numbers = re.findall(
+        r"\b\d{2}\b",
+        cleaned,
+    )
 
     if numbers:
-        other = re.sub(r"[\d\s/.,;:-]", "", cleaned)
+
+        other = re.sub(
+            r"[\d\s/.,;:-]",
+            "",
+            cleaned,
+        )
 
         if not other:
             return True
@@ -175,13 +207,14 @@ def is_size_line(line):
 
 
 def normalize_sizes(text):
+
     lines = [
         line.strip()
         for line in text.splitlines()
         if line.strip()
     ]
 
-    # Спочатку шукаємо буквені розміри
+    # Спочатку буквені розміри
     for line in lines:
 
         if re.search(
@@ -197,6 +230,7 @@ def normalize_sizes(text):
             )
 
             if sizes:
+
                 return "/".join(
                     size.upper()
                     for size in sizes
@@ -207,33 +241,40 @@ def normalize_sizes(text):
 
         numbers = re.findall(
             r"\b\d{2}\b",
-            line
+            line,
         )
 
         if numbers:
 
-            # Не беремо ціну та знижку
-            if re.search(r"\d+\s*%", line):
+            # Не беремо ціну
+            if re.search(
+                r"\d+\s*€",
+                line,
+            ):
                 continue
 
-            if re.search(r"\d+\s*€", line):
+            # Не беремо знижку
+            if re.search(
+                r"\d+\s*%",
+                line,
+            ):
                 continue
 
-            # Перевіряємо, що це справді рядок розмірів
             cleaned = re.sub(
                 r"[\d\s/.,;:-]",
                 "",
-                line
+                line,
             )
 
             if not cleaned:
+
                 return "/".join(numbers)
 
     return ""
 
 
 # -------------------------------------------------
-# CAPTION
+# CREATE CAPTION
 # -------------------------------------------------
 
 def create_caption(text):
@@ -244,41 +285,53 @@ def create_caption(text):
     sizes = normalize_sizes(text)
 
     if price is None:
-        return "⚠️ Не вдалося знайти ціну."
+
+        return (
+            "⚠️ Не вдалося знайти ціну."
+        )
 
     if discount is None:
-        return "⚠️ Не вдалося знайти знижку."
+
+        return (
+            "⚠️ Не вдалося знайти знижку."
+        )
 
     if not brand:
+
         brand = "brand"
 
-    # Знижка зменшується на 10 процентних пунктів
-    new_discount = max(discount - 10, 0)
+    # Зменшуємо знижку на 10 процентних пунктів
+    new_discount = max(
+        discount - 10,
+        0,
+    )
 
-    # Розрахунок нової ціни
+    # Рахуємо кінцеву ціну
     new_price = round(
-        price * (1 - new_discount / 100)
+        price * (
+            1 - new_discount / 100
+        )
     )
 
     caption = (
-        f"*#{brand}*\n"
-        f"*{sizes}*\n\n"
-        f"*🏷️{price:g}€-%={new_price}€*\n"
-        f"*+ доставка 📦*\n\n"
-        f"*Для консультації та замовлення:*\n"
-        f"*💌@irasavchenkoo*"
+        f"<i>#{brand}</i>\n"
+        f"<i>{sizes}</i>\n\n"
+        f"<i>🏷️{price:g}€-%={new_price}€</i>\n"
+        f"<i>+ доставка 📦</i>\n\n"
+        f"<i>Для консультації та замовлення:</i>\n"
+        f"<i>💌@irasavchenkoo</i>"
     )
 
     return caption
 
 
 # -------------------------------------------------
-# TELEGRAM
+# TELEGRAM MESSAGE
 # -------------------------------------------------
 
 async def handle_message(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     message = update.message
@@ -286,25 +339,38 @@ async def handle_message(
     if not message:
         return
 
-    text = message.caption or message.text or ""
+    # Беремо текст повідомлення
+    # або caption до фото/відео
+    text = (
+        message.caption
+        or message.text
+        or ""
+    )
 
     if not text:
+
         await message.reply_text(
             "⚠️ Не знайшов текст для обробки."
         )
+
         return
 
     caption = create_caption(text)
 
     await message.reply_text(
         caption,
-        parse_mode="Markdown"
+        parse_mode="HTML",
     )
 
+
+# -------------------------------------------------
+# START BOT
+# -------------------------------------------------
 
 def main():
 
     if not BOT_TOKEN:
+
         raise ValueError(
             "BOT_TOKEN is not set"
         )
@@ -325,10 +391,13 @@ def main():
         )
     )
 
-    print("DESIR POST BOT started")
+    print(
+        "DESIR POST BOT started"
+    )
 
     app.run_polling()
 
 
 if __name__ == "__main__":
+
     main()
