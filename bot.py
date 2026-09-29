@@ -3,7 +3,7 @@ import re
 import asyncio
 import logging
 
-from telegram import InputMediaPhoto, InputMediaVideo
+from telegram import Update, InputMediaPhoto, InputMediaVideo
 from telegram.ext import (
     Application,
     MessageHandler,
@@ -20,19 +20,16 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 WAIT_SECONDS = 10
 
-# Повідомлення, які чекають на об'єднання
-message_batches = {}
+# Окремі повідомлення, які приходять від користувача
+pending_messages = {}
 
-# Таймери
-batch_tasks = {}
-
-# Telegram albums
+# Вже зібрані альбоми
 albums = {}
 
 
-# ============================================================
+# =========================
 # PRICE
-# ============================================================
+# =========================
 
 def find_price(text):
     patterns = [
@@ -44,22 +41,17 @@ def find_price(text):
         match = re.search(pattern, text)
 
         if match:
-            return float(
-                match.group(1).replace(",", ".")
-            )
+            return float(match.group(1).replace(",", "."))
 
     return None
 
 
-# ============================================================
+# =========================
 # DISCOUNT
-# ============================================================
+# =========================
 
 def find_discount(text):
-    match = re.search(
-        r"-?\s*(\d{1,2})\s*%",
-        text,
-    )
+    match = re.search(r"-?\s*(\d{1,2})\s*%", text)
 
     if match:
         return int(match.group(1))
@@ -67,9 +59,9 @@ def find_discount(text):
     return None
 
 
-# ============================================================
+# =========================
 # BRAND
-# ============================================================
+# =========================
 
 def clean_brand(brand):
     brand = brand.replace("#", "")
@@ -84,11 +76,7 @@ def clean_brand(brand):
     brand = brand.replace("&", "")
     brand = brand.replace("'", "")
 
-    brand = re.sub(
-        r"[\s-]+",
-        "",
-        brand,
-    )
+    brand = re.sub(r"[\s-]+", "", brand)
 
     return brand
 
@@ -100,14 +88,12 @@ def find_brand(text):
         if line.strip()
     ]
 
-    # Hashtag
+    # Спочатку шукаємо hashtag
     for line in lines:
         if line.startswith("#"):
-            return clean_brand(
-                line.split()[0]
-            )
+            return clean_brand(line.split()[0])
 
-    # Назва бренду текстом
+    # Потім звичайну назву бренду
     for line in lines:
 
         if re.search(r"\d+\s*€", line):
@@ -116,10 +102,7 @@ def find_brand(text):
         if re.search(r"\d+\s*%", line):
             continue
 
-        if re.fullmatch(
-            r"[\d\s./,-]+",
-            line,
-        ):
+        if re.fullmatch(r"[\d\s./,-]+", line):
             continue
 
         if is_size_line(line):
@@ -137,9 +120,9 @@ def find_brand(text):
     return None
 
 
-# ============================================================
+# =========================
 # SIZES
-# ============================================================
+# =========================
 
 LETTER_SIZE_PATTERN = (
     r"\b(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)\b"
@@ -156,6 +139,7 @@ def is_size_line(line):
     )
 
     if letter_sizes:
+
         cleaned = re.sub(
             LETTER_SIZE_PATTERN,
             "",
@@ -178,6 +162,7 @@ def is_size_line(line):
     )
 
     if numbers:
+
         cleaned = re.sub(
             r"\d+(?:[.,]\d+)?",
             "",
@@ -197,13 +182,14 @@ def is_size_line(line):
 
 
 def normalize_sizes(text):
+
     lines = [
         line.strip()
         for line in text.splitlines()
         if line.strip()
     ]
 
-    # Буквені розміри
+    # XS / S / M / L
     for line in lines:
 
         sizes = re.findall(
@@ -233,7 +219,7 @@ def normalize_sizes(text):
                     for size in sizes
                 )
 
-    # Числові розміри
+    # Цифрові розміри
     for line in lines:
 
         if re.search(r"\d+\s*%", line):
@@ -250,9 +236,9 @@ def normalize_sizes(text):
         if not numbers:
             continue
 
-        # Самотнє маленьке число типу 2
-        # не вважаємо розміром
+        # Одна цифра типу "2" — не розмір
         if len(numbers) == 1:
+
             try:
                 number = float(
                     numbers[0].replace(",", ".")
@@ -282,48 +268,41 @@ def normalize_sizes(text):
         result = []
 
         for number in numbers:
-            result.append(
-                number.replace(",", ".")
-            )
+
+            number = number.replace(",", ".")
+
+            result.append(number)
 
         return "/".join(result)
 
     return ""
 
 
-# ============================================================
+# =========================
 # CAPTION
-# ============================================================
+# =========================
 
 def create_caption(text):
+
     price = find_price(text)
     discount = find_discount(text)
     brand = find_brand(text)
     sizes = normalize_sizes(text)
 
     if price is None:
-        return (
-            "<i>⚠️ Не вдалося знайти ціну.</i>"
-        )
+        return "<i>⚠️ Не вдалося знайти ціну.</i>"
 
     if discount is None:
-        return (
-            "<i>⚠️ Не вдалося знайти знижку.</i>"
-        )
+        return "<i>⚠️ Не вдалося знайти знижку.</i>"
 
     if not brand:
         brand = "brand"
 
-    # Зменшуємо знижку на 10 процентних пунктів
-    new_discount = max(
-        discount - 10,
-        0,
-    )
+    # Мінус 10% від початкової знижки
+    new_discount = max(discount - 10, 0)
 
     new_price = round(
-        price * (
-            1 - new_discount / 100
-        )
+        price * (1 - new_discount / 100)
     )
 
     return (
@@ -336,362 +315,141 @@ def create_caption(text):
     )
 
 
-# ============================================================
-# ВИТЯГУЄМО ТЕКСТ
-# ============================================================
+# =========================
+# TEXT FROM MESSAGE
+# =========================
 
 def get_message_text(message):
-    """
-    Текст може бути:
-    - звичайним message.text
-    - caption до фото/відео/document
-    """
-
-    if message.text:
-        return message.text
 
     if message.caption:
         return message.caption
 
+    if message.text:
+        return message.text
+
     return ""
 
 
-# ============================================================
-# ВИТЯГУЄМО ФОТО
-# ============================================================
+# =========================
+# MEDIA FROM MESSAGE
+# =========================
 
-def get_photo_file_id(message):
-    """
-    Підтримує:
-    - звичайне фото
-    - фото, переслане з каналу
-    - photo з caption
-    """
+def get_media(message):
 
     if message.photo:
-        return message.photo[-1].file_id
 
-    return None
-
-
-# ============================================================
-# ВИТЯГУЄМО ВІДЕО
-# ============================================================
-
-def get_video_file_id(message):
+        return (
+            "photo",
+            message.photo[-1].file_id,
+        )
 
     if message.video:
-        return message.video.file_id
 
-    return None
-
-
-# ============================================================
-# ОБРОБКА ОДНОГО ПАКЕТА
-# ============================================================
-
-async def process_batch(
-    chat_id,
-    context,
-):
-
-    batch = message_batches.pop(
-        chat_id,
-        [],
-    )
-
-    batch_tasks.pop(
-        chat_id,
-        None,
-    )
-
-    if not batch:
-        return
-
-    logging.info(
-        "Processing batch: chat_id=%s messages=%s",
-        chat_id,
-        len(batch),
-    )
-
-    # --------------------------------------------------------
-    # ЗБИРАЄМО ВЕСЬ ТЕКСТ
-    # --------------------------------------------------------
-
-    texts = []
-
-    for message in batch:
-
-        text = get_message_text(
-            message
+        return (
+            "video",
+            message.video.file_id,
         )
 
-        if text:
-            texts.append(text)
+    # Якщо фото прийшло як документ
+    if message.document:
 
-    source_text = "\n".join(
-        texts
-    ).strip()
+        mime = message.document.mime_type or ""
 
-    # --------------------------------------------------------
-    # ЗБИРАЄМО ФОТО
-    # --------------------------------------------------------
+        if mime.startswith("image/"):
 
-    photos = []
-
-    videos = []
-
-    for message in batch:
-
-        photo_id = get_photo_file_id(
-            message
-        )
-
-        if photo_id:
-            photos.append(photo_id)
-
-        video_id = get_video_file_id(
-            message
-        )
-
-        if video_id:
-            videos.append(video_id)
-
-    # --------------------------------------------------------
-    # ФОТО + ТЕКСТ
-    # --------------------------------------------------------
-
-    if photos and source_text:
-
-        caption = create_caption(
-            source_text
-        )
-
-        # Одне фото
-        if len(photos) == 1:
-
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=photos[0],
-                caption=caption,
-                parse_mode="HTML",
+            return (
+                "photo",
+                message.document.file_id,
             )
 
-            return
-
-        # Кілька фото
-        media = []
-
-        for index, file_id in enumerate(
-            photos
-        ):
-
-            if index == 0:
-
-                media.append(
-                    InputMediaPhoto(
-                        media=file_id,
-                        caption=caption,
-                        parse_mode="HTML",
-                    )
-                )
-
-            else:
-
-                media.append(
-                    InputMediaPhoto(
-                        media=file_id
-                    )
-                )
-
-        for start in range(
-            0,
-            len(media),
-            10,
-        ):
-
-            chunk = media[
-                start:start + 10
-            ]
-
-            await context.bot.send_media_group(
-                chat_id=chat_id,
-                media=chunk,
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # ВІДЕО + ТЕКСТ
-    # --------------------------------------------------------
-
-    if videos and source_text:
-
-        caption = create_caption(
-            source_text
-        )
-
-        if len(videos) == 1:
-
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=videos[0],
-                caption=caption,
-                parse_mode="HTML",
-            )
-
-            return
-
-        media = []
-
-        for index, file_id in enumerate(
-            videos
-        ):
-
-            if index == 0:
-
-                media.append(
-                    InputMediaVideo(
-                        media=file_id,
-                        caption=caption,
-                        parse_mode="HTML",
-                    )
-                )
-
-            else:
-
-                media.append(
-                    InputMediaVideo(
-                        media=file_id
-                    )
-                )
-
-        for start in range(
-            0,
-            len(media),
-            10,
-        ):
-
-            chunk = media[
-                start:start + 10
-            ]
-
-            await context.bot.send_media_group(
-                chat_id=chat_id,
-                media=chunk,
-            )
-
-        return
-
-    # --------------------------------------------------------
-    # ТІЛЬКИ ТЕКСТ
-    # --------------------------------------------------------
-
-    if source_text:
-
-        caption = create_caption(
-            source_text
-        )
-
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode="HTML",
-        )
-
-        return
+    return None, None
 
 
-# ============================================================
-# ТАЙМЕР 10 СЕКУНД
-# ============================================================
+# =========================
+# PROCESS ALBUM
+# =========================
 
-async def start_batch_timer(
-    chat_id,
-    context,
-):
+async def process_album(chat_id, group_id):
 
-    await asyncio.sleep(
-        WAIT_SECONDS
-    )
+    await asyncio.sleep(WAIT_SECONDS)
 
-    await process_batch(
-        chat_id,
-        context,
-    )
+    key = (chat_id, group_id)
 
-
-# ============================================================
-# АЛЬБОМ
-# ============================================================
-
-async def process_album(
-    group_id,
-    context,
-):
-
-    await asyncio.sleep(2)
-
-    messages = albums.pop(
-        group_id,
-        [],
-    )
+    messages = albums.pop(key, [])
 
     if not messages:
         return
 
+    # Сортуємо в правильному порядку
     messages.sort(
         key=lambda m: m.message_id
     )
 
-    # Шукаємо текст/caption
-    texts = []
+    logging.info(
+        "PROCESS ALBUM chat=%s group=%s messages=%s",
+        chat_id,
+        group_id,
+        len(messages),
+    )
+
+    # -------------------------
+    # Шукаємо текст
+    # -------------------------
+
+    source_text = ""
 
     for message in messages:
 
-        text = get_message_text(
-            message
-        )
+        text = get_message_text(message)
 
         if text:
-            texts.append(text)
+            source_text = text
+            break
 
-    source_text = "\n".join(
-        texts
-    ).strip()
+    # Якщо тексту в самому альбомі немає,
+    # шукаємо текст серед pending messages
+    if not source_text:
 
-    photos = []
+        pending_key = chat_id
 
-    videos = []
-
-    for message in messages:
-
-        photo_id = get_photo_file_id(
-            message
+        pending = pending_messages.get(
+            pending_key,
+            [],
         )
 
-        if photo_id:
-            photos.append(photo_id)
+        for item in pending:
 
-        video_id = get_video_file_id(
-            message
+            text = item.get("text", "")
+
+            if text:
+
+                source_text = text
+                break
+
+    if not source_text:
+
+        await messages[0].reply_text(
+            "⚠️ Не знайшов текст із брендом, ціною та знижкою."
         )
 
-        if video_id:
-            videos.append(video_id)
+        return
 
-    # Якщо album уже має текст
-    if source_text:
+    caption = create_caption(source_text)
 
-        caption = create_caption(
-            source_text
-        )
+    # -------------------------
+    # Формуємо медіа
+    # -------------------------
 
-        media = []
+    media = []
 
-        for index, file_id in enumerate(
-            photos
-        ):
+    for index, message in enumerate(messages):
+
+        media_type, file_id = get_media(message)
+
+        if not file_id:
+            continue
+
+        if media_type == "photo":
 
             if index == 0:
 
@@ -711,11 +469,9 @@ async def process_album(
                     )
                 )
 
-        for index, file_id in enumerate(
-            videos
-        ):
+        elif media_type == "video":
 
-            if not media:
+            if index == 0:
 
                 media.append(
                     InputMediaVideo(
@@ -733,54 +489,182 @@ async def process_album(
                     )
                 )
 
-        for start in range(
-            0,
-            len(media),
-            10,
-        ):
+    if not media:
+        return
 
-            chunk = media[
-                start:start + 10
-            ]
+    # Telegram дозволяє максимум 10 медіа
+    for start in range(0, len(media), 10):
 
-            await context.bot.send_media_group(
-                chat_id=messages[0].chat_id,
-                media=chunk,
+        chunk = media[start:start + 10]
+
+        await messages[0].reply_media_group(
+            media=chunk
+        )
+
+    # Після обробки видаляємо використаний текст
+    pending_messages.pop(
+        chat_id,
+        None,
+    )
+
+
+# =========================
+# PROCESS SEPARATE MESSAGES
+# =========================
+
+async def process_pending(chat_id):
+
+    await asyncio.sleep(WAIT_SECONDS)
+
+    items = pending_messages.pop(
+        chat_id,
+        [],
+    )
+
+    if not items:
+        return
+
+    media_items = []
+    source_text = ""
+
+    # -------------------------
+    # Збираємо текст і медіа
+    # -------------------------
+
+    for item in items:
+
+        message = item["message"]
+
+        text = get_message_text(message)
+
+        if text:
+            source_text = text
+
+        media_type, file_id = get_media(message)
+
+        if file_id:
+
+            media_items.append(
+                (
+                    media_type,
+                    file_id,
+                    message,
+                )
+            )
+
+    if not media_items:
+        return
+
+    if not source_text:
+
+        await items[0]["message"].reply_text(
+            "⚠️ Не знайшов текст із брендом, ціною та знижкою."
+        )
+
+        return
+
+    caption = create_caption(
+        source_text
+    )
+
+    # -------------------------
+    # Одне фото
+    # -------------------------
+
+    if len(media_items) == 1:
+
+        media_type, file_id, message = media_items[0]
+
+        if media_type == "photo":
+
+            await message.reply_photo(
+                photo=file_id,
+                caption=caption,
+                parse_mode="HTML",
+            )
+
+        elif media_type == "video":
+
+            await message.reply_video(
+                video=file_id,
+                caption=caption,
+                parse_mode="HTML",
             )
 
         return
 
-    # Якщо album без тексту —
-    # додаємо його в загальний пакет
-    chat_id = messages[0].chat_id
+    # -------------------------
+    # Кілька окремих фото
+    # -------------------------
 
-    if chat_id not in message_batches:
+    media = []
 
-        message_batches[chat_id] = []
+    for index, (
+        media_type,
+        file_id,
+        message,
+    ) in enumerate(media_items):
 
-    message_batches[chat_id].extend(
-        messages
-    )
+        if media_type == "photo":
 
-    if chat_id not in batch_tasks:
+            if index == 0:
 
-        task = asyncio.create_task(
-            start_batch_timer(
-                chat_id,
-                context,
-            )
+                media.append(
+                    InputMediaPhoto(
+                        media=file_id,
+                        caption=caption,
+                        parse_mode="HTML",
+                    )
+                )
+
+            else:
+
+                media.append(
+                    InputMediaPhoto(
+                        media=file_id
+                    )
+                )
+
+        elif media_type == "video":
+
+            if index == 0:
+
+                media.append(
+                    InputMediaVideo(
+                        media=file_id,
+                        caption=caption,
+                        parse_mode="HTML",
+                    )
+                )
+
+            else:
+
+                media.append(
+                    InputMediaVideo(
+                        media=file_id
+                    )
+                )
+
+    for start in range(
+        0,
+        len(media),
+        10,
+    ):
+
+        chunk = media[start:start + 10]
+
+        await items[0]["message"].reply_media_group(
+            media=chunk
         )
 
-        batch_tasks[chat_id] = task
 
-
-# ============================================================
-# ГОЛОВНИЙ HANDLER
-# ============================================================
+# =========================
+# MAIN HANDLER
+# =========================
 
 async def handle_message(
-    update,
-    context,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     message = update.message
@@ -788,87 +672,79 @@ async def handle_message(
     if not message:
         return
 
-    # --------------------------------------------------------
-    # ДІАГНОСТИКА
-    # --------------------------------------------------------
+    chat_id = message.chat_id
 
     logging.info(
-        "MESSAGE: photo=%s video=%s document=%s "
-        "text=%s caption=%s forwarded=%s",
+        "MESSAGE id=%s photo=%s video=%s document=%s "
+        "text=%s caption=%s media_group=%s forwarded=%s",
+        message.message_id,
         bool(message.photo),
         bool(message.video),
         bool(message.document),
         bool(message.text),
         bool(message.caption),
+        message.media_group_id,
         bool(message.forward_origin),
     )
 
-    # --------------------------------------------------------
-    # ALBUM
-    # --------------------------------------------------------
+    # ==================================================
+    # АЛЬБОМ
+    # ==================================================
 
     if message.media_group_id:
 
         group_id = message.media_group_id
 
-        if group_id not in albums:
+        key = (chat_id, group_id)
 
-            albums[group_id] = []
+        if key not in albums:
 
-        albums[group_id].append(
-            message
-        )
-
-        if len(albums[group_id]) == 1:
+            albums[key] = []
 
             asyncio.create_task(
                 process_album(
+                    chat_id,
                     group_id,
-                    context,
                 )
             )
 
+        albums[key].append(message)
+
         return
 
-    # --------------------------------------------------------
-    # ДОДАЄМО ПОВІДОМЛЕННЯ В ПАКЕТ
-    # --------------------------------------------------------
+    # ==================================================
+    # ЗВИЧАЙНЕ ПОВІДОМЛЕННЯ
+    # ==================================================
 
-    chat_id = message.chat_id
+    # Якщо це одиночне фото / відео / документ
+    media_type, file_id = get_media(message)
 
-    if chat_id not in message_batches:
+    text = get_message_text(message)
 
-        message_batches[chat_id] = []
+    # Створюємо чергу для 10 секунд
+    if chat_id not in pending_messages:
 
-    message_batches[chat_id].append(
-        message
+        pending_messages[chat_id] = []
+
+    pending_messages[chat_id].append(
+        {
+            "message": message,
+            "text": text,
+        }
     )
 
-    logging.info(
-        "Added message to batch: "
-        "chat_id=%s",
-        chat_id,
-    )
+    # Якщо це перше повідомлення,
+    # запускаємо обробку через 10 секунд
+    if len(pending_messages[chat_id]) == 1:
 
-    # --------------------------------------------------------
-    # ЗАПУСКАЄМО 10-СЕКУНДНИЙ ТАЙМЕР
-    # --------------------------------------------------------
-
-    if chat_id not in batch_tasks:
-
-        task = asyncio.create_task(
-            start_batch_timer(
-                chat_id,
-                context,
-            )
+        asyncio.create_task(
+            process_pending(chat_id)
         )
 
-        batch_tasks[chat_id] = task
 
-
-# ============================================================
-# MAIN
-# ============================================================
+# =========================
+# START
+# =========================
 
 def main():
 
@@ -885,10 +761,15 @@ def main():
         .build()
     )
 
+    # ВАЖЛИВО:
+    # Document.ALL доданий спеціально для випадків,
+    # коли переслане фото приходить як document.
+
     application.add_handler(
         MessageHandler(
             filters.PHOTO
             | filters.VIDEO
+            | filters.Document.ALL
             | filters.TEXT,
             handle_message,
         )
