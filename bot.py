@@ -36,14 +36,17 @@ pending_media = {}
 def find_price(text):
 
     patterns = [
-        # 3.600€ / 3,600€ / 12.500€
+        # 1.200€ / 3.500€ / 1,200€
         r"(\d{1,3}(?:[.,]\d{3})+)\s*€",
 
-        # 3600€ / 3600 € / 999.99€
+        # 1200€ / 3500€ / 1200,50€
         r"(\d+(?:[.,]\d+)?)\s*€",
 
-        # 3.600 - 20% / 3600 - 20%
-        r"(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*[-–—]\s*\d+\s*%",
+        # 1.200 - 20% / 3.500 - 30%
+        r"(\d{1,3}(?:[.,]\d{3})+)\s*[-–—]\s*\d+\s*%",
+
+        # 1200 - 20% / 3500 - 30%
+        r"(\d+(?:[.,]\d+)?)\s*[-–—]\s*\d+\s*%",
     ]
 
     for pattern in patterns:
@@ -57,31 +60,28 @@ def find_price(text):
 
             value = match.group(1)
 
-            # 3.600 → 3600
-            # 3,600 → 3600
+            # 1.200 / 3.500 / 1,200 → 1200 / 3500 / 1200
             if re.fullmatch(
                 r"\d{1,3}(?:[.,]\d{3})+",
                 value,
             ):
 
-                return float(
-                    re.sub(
-                        r"[.,]",
-                        "",
-                        value,
-                    )
+                value = re.sub(
+                    r"[.,]",
+                    "",
+                    value,
                 )
 
-            # 999,99 → 999.99
-            return float(
-                value.replace(
+            else:
+
+                value = value.replace(
                     ",",
                     ".",
                 )
-            )
+
+            return float(value)
 
     return None
-
 
 # =========================================================
 # DISCOUNT
@@ -101,7 +101,6 @@ def find_discount(text):
         )
 
     return None
-
 
 # =========================================================
 # BRAND
@@ -139,7 +138,6 @@ def clean_brand(brand):
     )
 
     return brand
-
 
 def find_brand(text):
 
@@ -193,7 +191,6 @@ def find_brand(text):
 
     return None
 
-
 # =========================================================
 # SIZES
 # =========================================================
@@ -201,7 +198,6 @@ def find_brand(text):
 LETTER_SIZE_PATTERN = (
     r"\b(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)\b"
 )
-
 
 def is_size_line(line):
 
@@ -254,7 +250,6 @@ def is_size_line(line):
             return True
 
     return False
-
 
 def normalize_sizes(text):
 
@@ -370,7 +365,6 @@ def normalize_sizes(text):
 
     return ""
 
-
 # =========================================================
 # CAPTION
 # =========================================================
@@ -418,7 +412,6 @@ def create_caption(text):
         f"<i>💌@irasavchenkoo</i>"
     )
 
-
 # =========================================================
 # SEND PHOTO
 # =========================================================
@@ -437,7 +430,6 @@ async def send_photo(
         caption=caption,
         parse_mode="HTML",
     )
-
 
 # =========================================================
 # SEND VIDEO
@@ -458,7 +450,6 @@ async def send_video(
         parse_mode="HTML",
     )
 
-
 # =========================================================
 # WAIT FOR TEXT AFTER MEDIA
 # =========================================================
@@ -478,6 +469,7 @@ async def wait_for_text(
     if not pending:
         return
 
+    # Якщо за 5 секунд текст так і не прийшов
     pending_media.pop(
         user_id,
         None,
@@ -487,22 +479,61 @@ async def wait_for_text(
         "⚠️ Не знайшов текст із брендом, ціною та знижкою."
     )
 
-
 # =========================================================
-# BUILD ALBUM
+# ALBUM
 # =========================================================
 
-async def send_album(
-    messages,
-    text,
+async def process_album(
+    group_id,
 ):
 
-    caption = create_caption(
-        text
+    await asyncio.sleep(2)
+
+    messages = albums.pop(
+        group_id,
+        [],
     )
+
+    if not messages:
+        return
 
     messages.sort(
         key=lambda m: m.message_id
+    )
+
+    source_text = ""
+
+    for message in messages:
+
+        if message.caption:
+
+            source_text = message.caption
+
+            break
+
+    # Якщо caption немає — чекаємо
+    # окреме текстове повідомлення
+    if not source_text:
+
+        first_message = messages[0]
+
+        user_id = first_message.from_user.id
+
+        pending_media[user_id] = {
+            "messages": messages,
+            "type": "album",
+        }
+
+        asyncio.create_task(
+            wait_for_text(
+                first_message
+            )
+        )
+
+        return
+
+    caption = create_caption(
+        source_text
     )
 
     media = []
@@ -562,9 +593,6 @@ async def send_album(
     if not media:
         return
 
-    # Telegram дозволяє максимум 10
-    # елементів в одному media group.
-
     for start in range(
         0,
         len(media),
@@ -578,79 +606,6 @@ async def send_album(
         await messages[0].reply_media_group(
             media=chunk
         )
-
-
-# =========================================================
-# PROCESS ALBUM
-# =========================================================
-
-async def process_album(
-    group_id,
-):
-
-    # Даємо Telegram час передати
-    # всі повідомлення альбому.
-    await asyncio.sleep(2)
-
-    messages = albums.pop(
-        group_id,
-        [],
-    )
-
-    if not messages:
-        return
-
-    messages.sort(
-        key=lambda m: m.message_id
-    )
-
-    source_text = ""
-
-    # -----------------------------------------------------
-    # Шукаємо caption серед усіх елементів
-    # -----------------------------------------------------
-
-    for message in messages:
-
-        if message.caption:
-
-            source_text = message.caption
-
-            break
-
-    # -----------------------------------------------------
-    # Якщо caption є — одразу весь альбом
-    # -----------------------------------------------------
-
-    if source_text:
-
-        await send_album(
-            messages,
-            source_text,
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # Якщо caption немає —
-    # чекаємо окремий текст
-    # -----------------------------------------------------
-
-    first_message = messages[0]
-
-    user_id = first_message.from_user.id
-
-    pending_media[user_id] = {
-        "messages": messages,
-        "type": "album",
-    }
-
-    asyncio.create_task(
-        wait_for_text(
-            first_message
-        )
-    )
-
 
 # =========================================================
 # MAIN HANDLER
@@ -669,7 +624,7 @@ async def handle_message(
     user_id = message.from_user.id
 
     # =====================================================
-    # TEXT
+    # Якщо це текст після фото/відео
     # =====================================================
 
     if message.text:
@@ -719,16 +674,95 @@ async def handle_message(
 
             if pending["type"] == "album":
 
-                await send_album(
-                    pending["messages"],
-                    text,
+                messages = pending[
+                    "messages"
+                ]
+
+                caption = create_caption(
+                    text
                 )
+
+                media = []
+
+                for index, item in enumerate(
+                    messages
+                ):
+
+                    if item.photo:
+
+                        file_id = (
+                            item.photo[-1].file_id
+                        )
+
+                        if index == 0:
+
+                            media.append(
+                                InputMediaPhoto(
+                                    media=file_id,
+                                    caption=caption,
+                                    parse_mode="HTML",
+                                )
+                            )
+
+                        else:
+
+                            media.append(
+                                InputMediaPhoto(
+                                    media=file_id,
+                                )
+                            )
+
+                    elif item.video:
+
+                        file_id = (
+                            item.video.file_id
+                        )
+
+                        if index == 0:
+
+                            media.append(
+                                InputMediaVideo(
+                                    media=file_id,
+                                    caption=caption,
+                                    parse_mode="HTML",
+                                )
+                            )
+
+                        else:
+
+                            media.append(
+                                InputMediaVideo(
+                                    media=file_id,
+                                )
+                            )
+
+                for start in range(
+                    0,
+                    len(media),
+                    10,
+                ):
+
+                    chunk = media[
+                        start:start + 10
+                    ]
+
+                    await messages[0].reply_media_group(
+                        media=chunk
+                    )
 
                 return
 
-        # -------------------------------------------------
-        # Звичайний текст без медіа НЕ обробляємо
-        # -------------------------------------------------
+        # Якщо немає фото/відео, просто
+        # обробляємо звичайний текст
+
+        caption = create_caption(
+            message.text
+        )
+
+        await message.reply_text(
+            caption,
+            parse_mode="HTML",
+        )
 
         return
 
@@ -748,16 +782,6 @@ async def handle_message(
             message
         )
 
-        # -------------------------------------------------
-        # ВАЖЛИВО:
-        #
-        # Таймер запускаємо тільки один раз —
-        # після першого повідомлення альбому.
-        #
-        # Telegram передає всі елементи одного
-        # media_group майже одночасно.
-        # -------------------------------------------------
-
         if len(albums[group_id]) == 1:
 
             asyncio.create_task(
@@ -774,9 +798,7 @@ async def handle_message(
 
     if message.photo:
 
-        # Якщо caption вже є —
-        # працюємо одразу.
-
+        # Якщо caption вже є — працюємо одразу
         if message.caption:
 
             await send_photo(
@@ -787,8 +809,7 @@ async def handle_message(
             return
 
         # Якщо caption немає —
-        # чекаємо текст.
-
+        # запам'ятовуємо фото
         pending_media[user_id] = {
             "message": message,
             "type": "photo",
@@ -830,7 +851,6 @@ async def handle_message(
 
         return
 
-
 # =========================================================
 # START
 # =========================================================
@@ -864,7 +884,6 @@ def main():
     )
 
     application.run_polling()
-
 
 if __name__ == "__main__":
 
