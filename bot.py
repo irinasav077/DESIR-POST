@@ -609,6 +609,13 @@ async def handle_message(
 ):
 
     message = update.message
+    logging.info(
+    f"photo={bool(message.photo)} "
+    f"video={bool(message.video)} "
+    f"document={bool(message.document)} "
+    f"text={bool(message.text)} "
+    f"caption={bool(message.caption)}"
+)
 
     if not message:
         return
