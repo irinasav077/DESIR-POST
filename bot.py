@@ -3,11 +3,9 @@ import re
 import asyncio
 import logging
 
-from telegram import (
-    Update,
-    InputMediaPhoto,
-    InputMediaVideo,
-)
+from telegram import Update
+from telegram import InputMediaPhoto, InputMediaVideo
+
 from telegram.ext import (
     Application,
     MessageHandler,
@@ -22,26 +20,37 @@ logging.basicConfig(
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Тимчасове сховище для альбомів
-media_groups = {}
+# Тимчасово зберігаємо альбоми
+albums = {}
 
 
-# =================================================
+# =========================================================
 # PRICE
-# =================================================
+# =========================================================
 
 def find_price(text):
 
+    # Наприклад:
+    # 650€
+    # 650 €
+    # 650-25%
+    # 650 -25%
+    # 650€. -20%
+
     patterns = [
         r"(\d+(?:[.,]\d+)?)\s*€",
-        r"(\d+(?:[.,]\d+)?)\s*€?\s*[\-–—]\s*\d+\s*%",
+        r"(\d+(?:[.,]\d+)?)\s*€?\s*[-–—]\s*\d+\s*%",
     ]
 
     for pattern in patterns:
 
-        match = re.search(pattern, text)
+        match = re.search(
+            pattern,
+            text,
+        )
 
         if match:
+
             return float(
                 match.group(1).replace(",", ".")
             )
@@ -49,9 +58,9 @@ def find_price(text):
     return None
 
 
-# =================================================
+# =========================================================
 # DISCOUNT
-# =================================================
+# =========================================================
 
 def find_discount(text):
 
@@ -61,72 +70,17 @@ def find_discount(text):
     )
 
     if match:
-        return int(match.group(1))
+
+        return int(
+            match.group(1)
+        )
 
     return None
 
 
-# =================================================
+# =========================================================
 # BRAND
-# =================================================
-
-def find_brand(text):
-
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-
-    # Спочатку шукаємо hashtag
-    for line in lines:
-
-        if line.startswith("#"):
-
-            brand = line.split()[0]
-
-            return clean_brand(brand)
-
-    # Потім шукаємо назву бренду
-    for line in lines:
-
-        # Ціна
-        if re.search(
-            r"\d+\s*€",
-            line,
-        ):
-            continue
-
-        # Знижка
-        if re.search(
-            r"\d+\s*%",
-            line,
-        ):
-            continue
-
-        # Тільки числа
-        if re.fullmatch(
-            r"[\d\s./,-]+",
-            line,
-        ):
-            continue
-
-        # Розміри
-        if is_size_line(line):
-            continue
-
-        # FW / SS / NEW / SALE тощо
-        if re.search(
-            r"\b(FW|SS|NEW|SALE|DROP|COLLECTION)\d*",
-            line,
-            re.IGNORECASE,
-        ):
-            continue
-
-        return clean_brand(line)
-
-    return None
-
+# =========================================================
 
 def clean_brand(brand):
 
@@ -144,14 +98,19 @@ def clean_brand(brand):
         brand,
     )
 
-    # Прибираємо & та апострофи
-    brand = re.sub(
-        r"[&']",
+    # Прибираємо &
+    brand = brand.replace(
+        "&",
         "",
-        brand,
     )
 
-    # Пробіли та дефіси прибираємо
+    # Прибираємо апострофи
+    brand = brand.replace(
+        "'",
+        "",
+    )
+
+    # Прибираємо пробіли та дефіси
     brand = re.sub(
         r"[\s-]+",
         "",
@@ -161,57 +120,125 @@ def clean_brand(brand):
     return brand
 
 
-# =================================================
-# SIZES
-# =================================================
+def find_brand(text):
 
-SIZE_WORDS = {
-    "XXXS",
-    "XXS",
-    "XS",
-    "S",
-    "M",
-    "L",
-    "XL",
-    "XXL",
-    "XXXL",
-}
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    # Спочатку шукаємо hashtag
+    for line in lines:
+
+        if line.startswith("#"):
+
+            return clean_brand(
+                line.split()[0]
+            )
+
+    # Потім шукаємо назву бренду
+    for line in lines:
+
+        # Не бренд, якщо це ціна
+        if re.search(
+            r"\d+\s*€",
+            line,
+        ):
+            continue
+
+        # Не бренд, якщо це знижка
+        if re.search(
+            r"\d+\s*%",
+            line,
+        ):
+            continue
+
+        # Не бренд, якщо тільки цифри
+        if re.fullmatch(
+            r"[\d\s./,-]+",
+            line,
+        ):
+            continue
+
+        # Не бренд, якщо це розміри
+        if is_size_line(line):
+            continue
+
+        # Не бренд, якщо це FW / NEW / SALE
+        if re.search(
+            r"\b(FW|SS|NEW|SALE|DROP|COLLECTION)\d*",
+            line,
+            re.IGNORECASE,
+        ):
+            continue
+
+        return clean_brand(line)
+
+    return None
+
+
+# =========================================================
+# SIZES
+# =========================================================
+
+LETTER_SIZE_PATTERN = (
+    r"\b(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)\b"
+)
 
 
 def is_size_line(line):
 
-    cleaned = line.upper().strip()
+    line = line.strip()
 
-    # S. M. L. XL.
-    words = re.findall(
-        r"[A-ZА-ЯІЇЄҐ]+",
-        cleaned,
+    # S M L XL
+    letter_sizes = re.findall(
+        LETTER_SIZE_PATTERN,
+        line,
+        re.IGNORECASE,
     )
 
-    if words and all(
-        word in SIZE_WORDS
-        for word in words
-    ):
-        return True
+    if letter_sizes:
 
-    # Числові розміри:
-    # 36 37 38
-    # 37.5 38 38.5
-    # 36/37/38
-    numbers = re.findall(
-        r"\b\d+(?:[.,]\d+)?\b",
-        cleaned,
-    )
+        # Перевіряємо, що в рядку немає
+        # зайвого тексту
+        cleaned = re.sub(
+            LETTER_SIZE_PATTERN,
+            "",
+            line,
+            flags=re.IGNORECASE,
+        )
 
-    if numbers:
-
-        other = re.sub(
-            r"[\d\s/.,;:+-]",
+        cleaned = re.sub(
+            r"[\s./,;:-]+",
             "",
             cleaned,
         )
 
-        if not other:
+        if cleaned == "":
+            return True
+
+    # Числові розміри
+    numbers = re.findall(
+        r"\d+(?:[.,]\d+)?",
+        line,
+    )
+
+    if numbers:
+
+        cleaned = re.sub(
+            r"\d+(?:[.,]\d+)?",
+            "",
+            line,
+        )
+
+        cleaned = re.sub(
+            r"[\s/;:,.+-]+",
+            "",
+            cleaned,
+        )
+
+        if cleaned == "":
             return True
 
     return False
@@ -225,99 +252,119 @@ def normalize_sizes(text):
         if line.strip()
     ]
 
-    # ---------------------------------------------
-    # БУКВЕНІ РОЗМІРИ
-    # ---------------------------------------------
+    # -----------------------------------------------------
+    # 1. БУКВЕНІ РОЗМІРИ
+    # -----------------------------------------------------
 
     for line in lines:
 
         sizes = re.findall(
-            r"\b(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)\b",
+            LETTER_SIZE_PATTERN,
             line,
             re.IGNORECASE,
         )
 
         if sizes:
 
-            return "/".join(
-                size.upper()
-                for size in sizes
+            cleaned = re.sub(
+                LETTER_SIZE_PATTERN,
+                "",
+                line,
+                flags=re.IGNORECASE,
             )
 
-    # ---------------------------------------------
-    # ЧИСЛОВІ РОЗМІРИ
-    # ---------------------------------------------
+            cleaned = re.sub(
+                r"[\s./,;:-]+",
+                "",
+                cleaned,
+            )
+
+            if cleaned == "":
+
+                return "/".join(
+                    size.upper()
+                    for size in sizes
+                )
+
+    # -----------------------------------------------------
+    # 2. ЧИСЛОВІ РОЗМІРИ
+    # -----------------------------------------------------
 
     for line in lines:
 
-        # Не беремо ціну
-        if re.search(
-            r"\d+\s*€",
-            line,
-        ):
-            continue
-
-        # Не беремо знижку
+        # Не чіпаємо рядок зі знижкою
         if re.search(
             r"\d+\s*%",
             line,
         ):
             continue
 
-        # Шукаємо:
-        # 37
-        # 37.5
-        # 38
-        # 38.5
-        # 37/37.5/38/38.5
-        # 36-37-38
+        # Не чіпаємо рядок з €
+        if "€" in line:
+            continue
+
         numbers = re.findall(
-            r"\b\d+(?:[.,]\d+)?\b",
+            r"\d+(?:[.,]\d+)?",
             line,
         )
 
         if not numbers:
             continue
 
-        # Не беремо одиночне число 2
+        # Якщо це просто "2" —
+        # це не розмір
         if len(numbers) == 1:
 
-            number = float(
-                numbers[0].replace(",", ".")
-            )
+            try:
+                number = float(
+                    numbers[0].replace(
+                        ",",
+                        ".",
+                    )
+                )
 
-            if number < 30:
+                if number < 30:
+                    continue
+
+            except ValueError:
                 continue
 
-        # Перевіряємо, що рядок складається
-        # тільки з чисел та розділових знаків
+        # Перевіряємо, що крім чисел
+        # немає стороннього тексту
         cleaned = re.sub(
-            r"[\d\s/.,;:+-]",
+            r"\d+(?:[.,]\d+)?",
             "",
             line,
         )
 
-        if not cleaned:
+        cleaned = re.sub(
+            r"[\s/;:,.+\-]+",
+            "",
+            cleaned,
+        )
 
-            result = []
+        if cleaned != "":
+            continue
 
-            for number in numbers:
+        result = []
 
-                number = number.replace(
-                    ",",
-                    ".",
-                )
+        for number in numbers:
 
-                result.append(number)
+            number = number.replace(
+                ",",
+                ".",
+            )
 
-            return "/".join(result)
+            result.append(number)
+
+        return "/".join(result)
 
     return ""
 
 
-# =================================================
-# CREATE CAPTION
-# =================================================
+# =========================================================
+# CAPTION
+# =========================================================
 
 def create_caption(text):
 
@@ -349,14 +396,14 @@ def create_caption(text):
         0,
     )
 
-    # Рахуємо нову ціну
+    # Рахуємо кінцеву ціну
     new_price = round(
         price * (
             1 - new_discount / 100
         )
     )
 
-    caption = (
+    return (
         f"<i>#{brand}</i>\n"
         f"<i>{sizes}</i>\n\n"
         f"<i>🏷️{price:g}€-%={new_price}€</i>\n"
@@ -365,33 +412,62 @@ def create_caption(text):
         f"<i>💌@irasavchenkoo</i>"
     )
 
-    return caption
 
-
-# =================================================
+# =========================================================
 # SINGLE PHOTO
-# =================================================
+# =========================================================
 
-async def send_photo(
+async def handle_photo(
     message,
-    caption,
 ):
 
+    text = message.caption or ""
+
+    if not text:
+
+        await message.reply_text(
+            "⚠️ Не знайшов текст для обробки."
+        )
+
+        return
+
+    caption = create_caption(
+        text
+    )
+
+    # Беремо найбільший варіант фото
+    photo_file_id = (
+        message.photo[-1].file_id
+    )
+
     await message.reply_photo(
-        photo=message.photo[-1].file_id,
+        photo=photo_file_id,
         caption=caption,
         parse_mode="HTML",
     )
 
 
-# =================================================
+# =========================================================
 # SINGLE VIDEO
-# =================================================
+# =========================================================
 
-async def send_video(
+async def handle_video(
     message,
-    caption,
 ):
+
+    text = message.caption or ""
+
+    if not text:
+
+        await message.reply_text(
+            "⚠️ Не знайшов текст для обробки."
+        )
+
+        return
+
+    caption = create_caption(
+        text
+    )
 
     await message.reply_video(
         video=message.video.file_id,
@@ -400,23 +476,32 @@ async def send_video(
     )
 
 
-# =================================================
-# MEDIA GROUP
-# =================================================
+# =========================================================
+# ALBUM
+# =========================================================
 
-async def send_album(
-    first_message,
-    messages,
+async def process_album(
+    group_id,
 ):
 
-    # Сортуємо медіа в правильному порядку
-    messages.sort(
-        key=lambda message: message.message_id
+    # Чекаємо, поки Telegram передасть
+    # усі елементи альбому
+    await asyncio.sleep(2)
+
+    messages = albums.pop(
+        group_id,
+        [],
     )
 
-    # Шукаємо caption.
-    # У Telegram він зазвичай є тільки
-    # в одному повідомленні альбому.
+    if not messages:
+        return
+
+    # Правильний порядок
+    messages.sort(
+        key=lambda m: m.message_id
+    )
+
+    # Шукаємо caption
     source_text = ""
 
     for message in messages:
@@ -427,22 +512,22 @@ async def send_album(
 
             break
 
-    # Створюємо наш підпис
     caption = create_caption(
         source_text
     )
 
     media = []
 
-    for index, message in enumerate(messages):
+    for index, message in enumerate(
+        messages
+    ):
 
-        # -----------------------------------------
         # PHOTO
-        # -----------------------------------------
-
         if message.photo:
 
-            file_id = message.photo[-1].file_id
+            file_id = (
+                message.photo[-1].file_id
+            )
 
             if index == 0:
 
@@ -462,13 +547,12 @@ async def send_album(
                     )
                 )
 
-        # -----------------------------------------
         # VIDEO
-        # -----------------------------------------
-
         elif message.video:
 
-            file_id = message.video.file_id
+            file_id = (
+                message.video.file_id
+            )
 
             if index == 0:
 
@@ -488,8 +572,11 @@ async def send_album(
                     )
                 )
 
-    # Telegram дозволяє максимум 10
-    # медіафайлів в одному альбомі
+    if not media:
+        return
+
+    # Telegram: максимум 10 елементів
+    # в одному media group
     for start in range(
         0,
         len(media),
@@ -500,50 +587,14 @@ async def send_album(
             start:start + 10
         ]
 
-        # Якщо це друга частина альбому,
-        # додаємо caption до першого файлу
-        # цієї частини не потрібно.
-        if start > 0:
-
-            for item in chunk:
-
-                item.caption = None
-
-        await first_message.reply_media_group(
-            media=chunk,
+        await messages[0].reply_media_group(
+            media=chunk
         )
 
 
-# =================================================
-# PROCESS ALBUM
-# =================================================
-
-async def process_album(
-    group_id,
-    first_message,
-):
-
-    # Чекаємо, поки Telegram
-    # передасть усі елементи альбому
-    await asyncio.sleep(2)
-
-    messages = media_groups.pop(
-        group_id,
-        [],
-    )
-
-    if not messages:
-        return
-
-    await send_album(
-        first_message,
-        messages,
-    )
-
-
-# =================================================
-# HANDLE MESSAGE
-# =================================================
+# =========================================================
+# MAIN HANDLER
+# =========================================================
 
 async def handle_message(
     update: Update,
@@ -555,97 +606,61 @@ async def handle_message(
     if not message:
         return
 
-    # ---------------------------------------------
-    # ALBUM
-    # ---------------------------------------------
+    # -----------------------------------------------------
+    # АЛЬБОМ
+    # -----------------------------------------------------
 
     if message.media_group_id:
 
         group_id = message.media_group_id
 
-        if group_id not in media_groups:
+        if group_id not in albums:
 
-            media_groups[group_id] = []
+            albums[group_id] = []
 
-        media_groups[group_id].append(
+        albums[group_id].append(
             message
         )
 
-        # Перший елемент запускає таймер
-        if len(media_groups[group_id]) == 1:
+        # Запускаємо таймер тільки
+        # для першого повідомлення
+        if len(albums[group_id]) == 1:
 
             asyncio.create_task(
                 process_album(
-                    group_id,
-                    message,
+                    group_id
                 )
             )
 
         return
 
-    # ---------------------------------------------
-    # SINGLE PHOTO
-    # ---------------------------------------------
+    # -----------------------------------------------------
+    # ОДНЕ ФОТО
+    # -----------------------------------------------------
 
     if message.photo:
 
-        text = (
-            message.caption
-            or ""
-        )
-
-        if not text:
-
-            await message.reply_text(
-                "⚠️ Не знайшов текст для обробки."
-            )
-
-            return
-
-        caption = create_caption(
-            text
-        )
-
-        await send_photo(
-            message,
-            caption,
+        await handle_photo(
+            message
         )
 
         return
 
-    # ---------------------------------------------
-    # SINGLE VIDEO
-    # ---------------------------------------------
+    # -----------------------------------------------------
+    # ОДНЕ ВІДЕО
+    # -----------------------------------------------------
 
     if message.video:
 
-        text = (
-            message.caption
-            or ""
-        )
-
-        if not text:
-
-            await message.reply_text(
-                "⚠️ Не знайшов текст для обробки."
-            )
-
-            return
-
-        caption = create_caption(
-            text
-        )
-
-        await send_video(
-            message,
-            caption,
+        await handle_video(
+            message
         )
 
         return
 
-    # ---------------------------------------------
-    # TEXT
-    # ---------------------------------------------
+    # -----------------------------------------------------
+    # ТЕКСТ
+    # -----------------------------------------------------
 
     if message.text:
 
@@ -659,9 +674,9 @@ async def handle_message(
         )
 
 
-# =================================================
+# =========================================================
 # START
-# =================================================
+# =========================================================
 
 def main():
 
@@ -671,14 +686,14 @@ def main():
             "BOT_TOKEN is not set"
         )
 
-    app = (
+    application = (
         Application
         .builder()
         .token(BOT_TOKEN)
         .build()
     )
 
-    app.add_handler(
+    application.add_handler(
         MessageHandler(
             filters.PHOTO
             | filters.VIDEO
@@ -691,7 +706,7 @@ def main():
         "DESIR POST BOT started"
     )
 
-    app.run_polling()
+    application.run_polling()
 
 
 if __name__ == "__main__":
