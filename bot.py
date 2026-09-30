@@ -19,6 +19,11 @@ logging.basicConfig(
 )
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ALLOWED_USERS = [
+
+    493563129
+
+]
 
 # =========================================================
 # STORAGE
@@ -622,6 +627,8 @@ async def handle_message(
         return
 
     user_id = message.from_user.id
+    if user_id not in ALLOWED_USERS:
+    return
 
     # =====================================================
     # Якщо це текст після фото/відео
