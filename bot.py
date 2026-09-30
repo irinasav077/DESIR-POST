@@ -628,7 +628,7 @@ async def handle_message(
 
     user_id = message.from_user.id
     if user_id not in ALLOWED_USERS:
-    return
+        return
 
     # =====================================================
     # Якщо це текст після фото/відео
