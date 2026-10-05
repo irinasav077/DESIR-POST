@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import logging
+import html
 
 from telegram import (
     Update,
@@ -69,7 +70,6 @@ def find_price(text):
 
             value = match.group(1)
 
-            # 1.200 / 3.500 / 1,200 → 1200 / 3500 / 1200
             if re.fullmatch(
                 r"\d{1,3}(?:[.,]\d{3})+",
                 value,
@@ -331,7 +331,6 @@ def normalize_sizes(text):
         if not numbers:
             continue
 
-        # Самотнє "2" — не розмір
         if len(numbers) == 1:
 
             try:
@@ -390,9 +389,6 @@ def calculate_auto_price(
     discount,
 ):
 
-    # Якщо є знижка —
-    # стара логіка: мінус 10 процентних пунктів
-
     if discount is not None:
 
         new_discount = max(
@@ -405,10 +401,6 @@ def calculate_auto_price(
                 1 - new_discount / 100
             )
         )
-
-    # Якщо знижки немає:
-    # до 1000€ включно +100€
-    # від 1001€ +15%
 
     if price <= 1000:
 
@@ -428,6 +420,7 @@ def calculate_auto_price(
 def price_keyboard(
     price,
     discount,
+    album_message_id=None,
 ):
 
     discount_value = (
@@ -440,42 +433,64 @@ def price_keyboard(
         round(price, 2)
     )
 
+    # Для звичайного фото/відео
+    prefix = "price"
+
+    # Для альбому:
+    # передаємо ID першого повідомлення
+    # альбому, щоб callback знав,
+    # caption якого треба змінити
+    if album_message_id is not None:
+
+        prefix = f"album"
+
+    if album_message_id is None:
+
+        def callback(action):
+
+            return (
+                f"price|{action}|"
+                f"{price_value}|"
+                f"{discount_value}"
+            )
+
+    else:
+
+        def callback(action):
+
+            return (
+                f"album|{action}|"
+                f"{album_message_id}|"
+                f"{price_value}|"
+                f"{discount_value}"
+            )
+
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     "+100€",
-                    callback_data=(
-                        f"price|100|{price_value}|{discount_value}"
-                    ),
+                    callback_data=callback("100"),
                 ),
                 InlineKeyboardButton(
                     "+150€",
-                    callback_data=(
-                        f"price|150|{price_value}|{discount_value}"
-                    ),
+                    callback_data=callback("150"),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "+15%",
-                    callback_data=(
-                        f"price|15p|{price_value}|{discount_value}"
-                    ),
+                    callback_data=callback("15p"),
                 ),
                 InlineKeyboardButton(
                     "+10%",
-                    callback_data=(
-                        f"price|10p|{price_value}|{discount_value}"
-                    ),
+                    callback_data=callback("10p"),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     "↩️ Авто",
-                    callback_data=(
-                        f"price|auto|{price_value}|{discount_value}"
-                    ),
+                    callback_data=callback("auto"),
                 ),
             ],
         ]
@@ -507,10 +522,6 @@ def create_caption(text):
         price,
         discount,
     )
-
-    # =====================================================
-    # РЯДОК ЦІНИ
-    # =====================================================
 
     if discount is not None:
 
@@ -547,7 +558,36 @@ def get_price_info(text):
 
 
 # =========================================================
-# REPLACE PRICE IN CAPTION
+# RESTORE ITALIC CAPTION
+# =========================================================
+
+def make_italic_caption(
+    caption,
+):
+
+    # Telegram віддає caption без HTML-тегів.
+    # Тому після редагування відновлюємо
+    # курсив для кожного непорожнього рядка.
+
+    lines = caption.split("\n")
+
+    result = []
+
+    for line in lines:
+
+        if line == "":
+            result.append("")
+
+        else:
+            result.append(
+                f"<i>{html.escape(line)}</i>"
+            )
+
+    return "\n".join(result)
+
+
+# =========================================================
+# REPLACE PRICE
 # =========================================================
 
 def replace_price_in_caption(
@@ -555,12 +595,10 @@ def replace_price_in_caption(
     new_price,
 ):
 
-    # Telegram повертає message.caption
-    # БЕЗ HTML-тегів <i>...</i>.
-    #
-    # Тому шукаємо просто рядок,
-    # який починається з 🏷️
-    # і закінчується перед переносом рядка.
+    # Замінюємо тільки рядок з 🏷️
+    # Незалежно від того,
+    # чи є там старий результат,
+    # чи ціна зі знижкою.
 
     pattern = r"🏷️[^\n]*"
 
@@ -568,12 +606,61 @@ def replace_price_in_caption(
         f"🏷️{new_price}€"
     )
 
-    return re.sub(
+    new_caption = re.sub(
         pattern,
         replacement,
         caption,
         count=1,
     )
+
+    # Повертаємо весь caption курсивом
+    return make_italic_caption(
+        new_caption
+    )
+
+
+# =========================================================
+# CALCULATE BUTTON PRICE
+# =========================================================
+
+def calculate_button_price(
+    action,
+    price,
+    discount,
+):
+
+    if action == "auto":
+
+        return calculate_auto_price(
+            price,
+            discount,
+        )
+
+    if action == "100":
+
+        return round(
+            price + 100
+        )
+
+    if action == "150":
+
+        return round(
+            price + 150
+        )
+
+    if action == "15p":
+
+        return round(
+            price * 1.15
+        )
+
+    if action == "10p":
+
+        return round(
+            price * 1.10
+        )
+
+    return None
 
 
 # =========================================================
@@ -593,6 +680,7 @@ async def handle_price_button(
     user_id = query.from_user.id
 
     if user_id not in ALLOWED_USERS:
+
         await query.answer()
         return
 
@@ -602,179 +690,332 @@ async def handle_price_button(
         await query.answer()
         return
 
-    if not data.startswith(
-        "price|"
-    ):
-        await query.answer()
-        return
-
     parts = data.split("|")
 
-    if len(parts) != 4:
-        await query.answer(
-            "Помилка даних кнопки."
-        )
-        return
+    # =====================================================
+    # ЗВИЧАЙНЕ ФОТО / ВІДЕО
+    # price|action|price|discount
+    # =====================================================
 
-    action = parts[1]
+    if parts[0] == "price":
 
-    try:
+        if len(parts) != 4:
 
-        price = float(
-            parts[2]
-        )
+            await query.answer(
+                "Помилка даних кнопки."
+            )
+            return
 
-    except ValueError:
-
-        await query.answer(
-            "Помилка ціни."
-        )
-        return
-
-    discount_text = parts[3]
-
-    if discount_text == "none":
-
-        discount = None
-
-    else:
+        action = parts[1]
 
         try:
 
-            discount = int(
-                discount_text
+            price = float(
+                parts[2]
             )
 
         except ValueError:
 
+            await query.answer(
+                "Помилка ціни."
+            )
+            return
+
+        discount_text = parts[3]
+
+        if discount_text == "none":
+
             discount = None
 
-    # =====================================================
-    # РОЗРАХУНОК
-    # =====================================================
+        else:
 
-    if action == "auto":
+            try:
 
-        new_price = calculate_auto_price(
+                discount = int(
+                    discount_text
+                )
+
+            except ValueError:
+
+                discount = None
+
+        new_price = calculate_button_price(
+            action,
             price,
             discount,
         )
 
-    elif action == "100":
-
-        new_price = round(
-            price + 100
-        )
-
-    elif action == "150":
-
-        new_price = round(
-            price + 150
-        )
-
-    elif action == "15p":
-
-        new_price = round(
-            price * 1.15
-        )
-
-    elif action == "10p":
-
-        new_price = round(
-            price * 1.10
-        )
-
-    else:
-
-        await query.answer(
-            "Невідома кнопка."
-        )
-        return
-
-    message = query.message
-
-    if not message:
-
-        await query.answer()
-        return
-
-    # =====================================================
-    # ОНОВЛЮЄМО CAPTION
-    # =====================================================
-
-    if message.caption:
-
-        new_caption = replace_price_in_caption(
-            message.caption,
-            new_price,
-        )
-
-        try:
-
-            await message.edit_caption(
-                caption=new_caption,
-                parse_mode="HTML",
-                reply_markup=price_keyboard(
-                    price,
-                    discount,
-                ),
-            )
+        if new_price is None:
 
             await query.answer(
-                f"Ціна: {new_price}€"
+                "Невідома кнопка."
+            )
+            return
+
+        message = query.message
+
+        if not message:
+
+            await query.answer()
+            return
+
+        if message.caption:
+
+            new_caption = replace_price_in_caption(
+                message.caption,
+                new_price,
             )
 
-        except Exception as error:
+            try:
 
-            logging.error(
-                f"Caption edit error: {error}"
+                await message.edit_caption(
+                    caption=new_caption,
+                    parse_mode="HTML",
+                    reply_markup=price_keyboard(
+                        price,
+                        discount,
+                    ),
+                )
+
+                await query.answer(
+                    f"Ціна: {new_price}€"
+                )
+
+            except Exception as error:
+
+                logging.error(
+                    f"Caption edit error: {error}"
+                )
+
+                await query.answer(
+                    "Не вдалося змінити ціну."
+                )
+
+            return
+
+        if message.text:
+
+            new_text = replace_price_in_caption(
+                message.text,
+                new_price,
             )
 
-            await query.answer(
-                "Не вдалося змінити ціну."
-            )
+            try:
 
-    # =====================================================
-    # ТЕКСТОВЕ ПОВІДОМЛЕННЯ
-    # =====================================================
+                await message.edit_text(
+                    text=new_text,
+                    parse_mode="HTML",
+                    reply_markup=price_keyboard(
+                        price,
+                        discount,
+                    ),
+                )
 
-    elif message.text:
+                await query.answer(
+                    f"Ціна: {new_price}€"
+                )
 
-        new_text = replace_price_in_caption(
-            message.text,
-            new_price,
-        )
+            except Exception as error:
 
-        try:
+                logging.error(
+                    f"Text edit error: {error}"
+                )
 
-            await message.edit_text(
-                text=new_text,
-                parse_mode="HTML",
-                reply_markup=price_keyboard(
-                    price,
-                    discount,
-                ),
-            )
+                await query.answer(
+                    "Не вдалося змінити ціну."
+                )
 
-            await query.answer(
-                f"Ціна: {new_price}€"
-            )
-
-        except Exception as error:
-
-            logging.error(
-                f"Text edit error: {error}"
-            )
-
-            await query.answer(
-                "Не вдалося змінити ціну."
-            )
-
-    else:
+            return
 
         await query.answer(
             "Не вдалося знайти підпис."
         )
+
+        return
+
+    # =====================================================
+    # АЛЬБОМ
+    #
+    # album|action|message_id|price|discount
+    # =====================================================
+
+    if parts[0] == "album":
+
+        if len(parts) != 5:
+
+            await query.answer(
+                "Помилка даних альбому."
+            )
+            return
+
+        action = parts[1]
+
+        try:
+
+            target_message_id = int(
+                parts[2]
+            )
+
+        except ValueError:
+
+            await query.answer(
+                "Помилка ID альбому."
+            )
+            return
+
+        try:
+
+            price = float(
+                parts[3]
+            )
+
+        except ValueError:
+
+            await query.answer(
+                "Помилка ціни."
+            )
+            return
+
+        discount_text = parts[4]
+
+        if discount_text == "none":
+
+            discount = None
+
+        else:
+
+            try:
+
+                discount = int(
+                    discount_text
+                )
+
+            except ValueError:
+
+                discount = None
+
+        new_price = calculate_button_price(
+            action,
+            price,
+            discount,
+        )
+
+        if new_price is None:
+
+            await query.answer(
+                "Невідома кнопка."
+            )
+            return
+
+        chat_id = query.message.chat_id
+
+        try:
+
+            target_message = (
+                await context.bot.get_messages(
+                    chat_id=chat_id,
+                    message_ids=[target_message_id],
+                )
+            )
+
+        except Exception:
+            target_message = None
+
+        # get_messages може бути недоступним
+        # у поточній версії API, тому працюємо
+        # напряму через edit_message_caption.
+
+        try:
+
+            # Спочатку отримуємо caption
+            # з повідомлення через локальне
+            # збереження нижче.
+            album_caption = None
+
+            for stored in albums.values():
+
+                for item in stored:
+
+                    if item.message_id == target_message_id:
+
+                        album_caption = item.caption
+                        break
+
+                if album_caption:
+                    break
+
+            # Якщо локально не знайшли,
+            # беремо caption із callback message,
+            # якщо це можливо.
+            if not album_caption:
+
+                album_caption = query.message.text
+
+            if not album_caption:
+
+                # У fallback-повідомленні caption
+                # може бути відсутній.
+                # Тоді використовуємо збережений
+                # caption у bot_data.
+                album_caption = context.application.bot_data.get(
+                    f"album_caption_{chat_id}_{target_message_id}"
+                )
+
+            if not album_caption:
+
+                await query.answer(
+                    "Не вдалося знайти caption альбому."
+                )
+                return
+
+            new_caption = replace_price_in_caption(
+                album_caption,
+                new_price,
+            )
+
+            await context.bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=target_message_id,
+                caption=new_caption,
+                parse_mode="HTML",
+            )
+
+            # Оновлюємо кнопки в окремому
+            # повідомленні під альбомом.
+            try:
+
+                await query.message.edit_text(
+                    text="💰 Керування ціною",
+                    reply_markup=price_keyboard(
+                        price,
+                        discount,
+                        album_message_id=target_message_id,
+                    ),
+                )
+
+            except Exception as error:
+
+                logging.error(
+                    f"Album control edit error: {error}"
+                )
+
+            await query.answer(
+                f"Ціна: {new_price}€"
+            )
+
+        except Exception as error:
+
+            logging.error(
+                f"Album price edit error: {error}"
+            )
+
+            await query.answer(
+                "Не вдалося змінити ціну."
+            )
+
+        return
+
+    await query.answer()
 
 
 # =========================================================
@@ -875,11 +1116,51 @@ async def wait_for_text(
 
 
 # =========================================================
+# SAVE ALBUM CAPTION
+# =========================================================
+
+def save_album_caption(
+    context,
+    chat_id,
+    message_id,
+    caption,
+):
+
+    context.application.bot_data[
+        f"album_caption_{chat_id}_{message_id}"
+    ] = caption
+
+
+# =========================================================
+# SEND ALBUM CONTROLS
+# =========================================================
+
+async def send_album_controls(
+    context,
+    chat_id,
+    target_message_id,
+    price,
+    discount,
+):
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="💰 Керування ціною",
+        reply_markup=price_keyboard(
+            price,
+            discount,
+            album_message_id=target_message_id,
+        ),
+    )
+
+
+# =========================================================
 # ALBUM
 # =========================================================
 
 async def process_album(
     group_id,
+    context,
 ):
 
     await asyncio.sleep(2)
@@ -1014,7 +1295,7 @@ async def process_album(
         )
 
     # =====================================================
-    # КНОПКИ ПІД ПЕРШИМ ФОТО АЛЬБОМУ
+    # КНОПКИ ДЛЯ АЛЬБОМУ
     # =====================================================
 
     if (
@@ -1022,22 +1303,24 @@ async def process_album(
         and price is not None
     ):
 
-        try:
+        first_sent = sent_messages[0]
 
-            await sent_messages[0].edit_caption(
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=price_keyboard(
-                    price,
-                    discount,
-                ),
-            )
+        # Зберігаємо caption для callback
+        save_album_caption(
+            context,
+            first_sent.chat_id,
+            first_sent.message_id,
+            caption,
+        )
 
-        except Exception as error:
-
-            logging.error(
-                f"Album button error: {error}"
-            )
+        # Кнопки окремим повідомленням
+        await send_album_controls(
+            context,
+            first_sent.chat_id,
+            first_sent.message_id,
+            price,
+            discount,
+        )
 
 
 # =========================================================
@@ -1196,29 +1479,31 @@ async def handle_message(
                         result
                     )
 
-                # Додаємо кнопки під першим фото
+                # =================================================
+                # КНОПКИ ДЛЯ АЛЬБОМУ
+                # =================================================
 
                 if (
                     sent_messages
                     and price is not None
                 ):
 
-                    try:
+                    first_sent = sent_messages[0]
 
-                        await sent_messages[0].edit_caption(
-                            caption=caption,
-                            parse_mode="HTML",
-                            reply_markup=price_keyboard(
-                                price,
-                                discount,
-                            ),
-                        )
+                    save_album_caption(
+                        context,
+                        first_sent.chat_id,
+                        first_sent.message_id,
+                        caption,
+                    )
 
-                    except Exception as error:
-
-                        logging.error(
-                            f"Album button error: {error}"
-                        )
+                    await send_album_controls(
+                        context,
+                        first_sent.chat_id,
+                        first_sent.message_id,
+                        price,
+                        discount,
+                    )
 
                 return
 
@@ -1273,7 +1558,8 @@ async def handle_message(
 
             asyncio.create_task(
                 process_album(
-                    group_id
+                    group_id,
+                    context,
                 )
             )
 
@@ -1285,9 +1571,6 @@ async def handle_message(
 
     if message.photo:
 
-        # Якщо caption вже є —
-        # працюємо одразу
-
         if message.caption:
 
             await send_photo(
@@ -1296,9 +1579,6 @@ async def handle_message(
             )
 
             return
-
-        # Якщо caption немає —
-        # запам'ятовуємо фото
 
         pending_media[user_id] = {
             "message": message,
@@ -1368,7 +1648,7 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             handle_price_button,
-            pattern=r"^price\|",
+            pattern=r"^(price|album)\|",
         )
     )
 
