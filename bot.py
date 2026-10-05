@@ -400,7 +400,7 @@ def create_caption(text):
         )
     )
 
-else:
+   else:
 
     if price <= 1000:
 
