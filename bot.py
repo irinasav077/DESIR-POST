@@ -561,15 +561,21 @@ def get_price_info(text):
 # RESTORE ITALIC CAPTION
 # =========================================================
 
-def make_italic_caption(
-    caption,
-):
+def make_italic_caption(caption):
 
-    # Telegram віддає caption без HTML-тегів.
-    # Тому після редагування відновлюємо
-    # курсив для кожного непорожнього рядка.
+    # Повністю прибираємо існуючі HTML-теги
+    # перед повторним форматуванням
+    clean_caption = re.sub(
+        r"<[^>]+>",
+        "",
+        caption,
+    )
 
-    lines = caption.split("\n")
+    clean_caption = html.unescape(
+        clean_caption
+    )
+
+    lines = clean_caption.split("\n")
 
     result = []
 
@@ -585,7 +591,6 @@ def make_italic_caption(
 
     return "\n".join(result)
 
-
 # =========================================================
 # REPLACE PRICE
 # =========================================================
@@ -595,11 +600,19 @@ def replace_price_in_caption(
     new_price,
 ):
 
-    # Замінюємо тільки рядок з 🏷️
-    # Незалежно від того,
-    # чи є там старий результат,
-    # чи ціна зі знижкою.
+    # Прибираємо HTML перед обробкою,
+    # щоб не створювати вкладені <i>
+    clean_caption = re.sub(
+        r"<[^>]+>",
+        "",
+        caption,
+    )
 
+    clean_caption = html.unescape(
+        clean_caption
+    )
+
+    # Замінюємо тільки рядок з 🏷️
     pattern = r"🏷️[^\n]*"
 
     replacement = (
@@ -609,11 +622,10 @@ def replace_price_in_caption(
     new_caption = re.sub(
         pattern,
         replacement,
-        caption,
+        clean_caption,
         count=1,
     )
 
-    # Повертаємо весь caption курсивом
     return make_italic_caption(
         new_caption
     )
