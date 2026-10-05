@@ -3,12 +3,18 @@ import re
 import asyncio
 import logging
 
-from telegram import Update
-from telegram import InputMediaPhoto, InputMediaVideo
+from telegram import (
+    Update,
+    InputMediaPhoto,
+    InputMediaVideo,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 
 from telegram.ext import (
     Application,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -19,10 +25,9 @@ logging.basicConfig(
 )
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
 ALLOWED_USERS = [
-
     493563129
-
 ]
 
 # =========================================================
@@ -31,8 +36,8 @@ ALLOWED_USERS = [
 
 albums = {}
 
-# Фото/відео, які чекають наступного текстового повідомлення
 pending_media = {}
+
 
 # =========================================================
 # PRICE
@@ -88,6 +93,7 @@ def find_price(text):
 
     return None
 
+
 # =========================================================
 # DISCOUNT
 # =========================================================
@@ -106,6 +112,7 @@ def find_discount(text):
         )
 
     return None
+
 
 # =========================================================
 # BRAND
@@ -143,6 +150,7 @@ def clean_brand(brand):
     )
 
     return brand
+
 
 def find_brand(text):
 
@@ -196,6 +204,7 @@ def find_brand(text):
 
     return None
 
+
 # =========================================================
 # SIZES
 # =========================================================
@@ -203,6 +212,7 @@ def find_brand(text):
 LETTER_SIZE_PATTERN = (
     r"\b(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL)\b"
 )
+
 
 def is_size_line(line):
 
@@ -255,6 +265,7 @@ def is_size_line(line):
             return True
 
     return False
+
 
 def normalize_sizes(text):
 
@@ -370,11 +381,117 @@ def normalize_sizes(text):
 
     return ""
 
+
 # =========================================================
-# CAPTION
-# =========================================================def create_caption(text):
+# AUTO PRICE
+# =========================================================
+
+def calculate_auto_price(
+    price,
+    discount,
+):
+
+    # Якщо є знижка —
+    # залишаємо твою стару логіку
+
+    if discount is not None:
+
+        new_discount = max(
+            discount - 10,
+            0,
+        )
+
+        return round(
+            price * (
+                1 - new_discount / 100
+            )
+        )
+
+    # Якщо знижки немає:
+    # до 1000€ включно +100€
+    # від 1001€ +15%
+
+    if price <= 1000:
+
+        return round(
+            price + 100
+        )
+
+    return round(
+        price * 1.15
+    )
+
+
+# =========================================================
+# BUTTONS
+# =========================================================
+
+def price_keyboard(
+    price,
+    discount,
+):
+
+    # Зберігаємо початкову ціну
+    # та discount у callback_data
+
+    discount_value = (
+        str(discount)
+        if discount is not None
+        else "none"
+    )
+
+    price_value = str(
+        round(price, 2)
+    )
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "+100€",
+                    callback_data=(
+                        f"price|100|{price_value}|{discount_value}"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    "+150€",
+                    callback_data=(
+                        f"price|150|{price_value}|{discount_value}"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "+15%",
+                    callback_data=(
+                        f"price|15p|{price_value}|{discount_value}"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    "+10%",
+                    callback_data=(
+                        f"price|10p|{price_value}|{discount_value}"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "↩️ Авто",
+                    callback_data=(
+                        f"price|auto|{price_value}|{discount_value}"
+                    ),
+                ),
+            ],
+        ]
+    )
+
+
+# =========================================================
+# CREATE CAPTION
+# =========================================================
 
 def create_caption(text):
+
     price = find_price(text)
     discount = find_discount(text)
     brand = find_brand(text)
@@ -391,7 +508,16 @@ def create_caption(text):
         brand = "brand"
 
     # =====================================================
-    # Якщо знижка є
+    # AUTO PRICE
+    # =====================================================
+
+    new_price = calculate_auto_price(
+        price,
+        discount,
+    )
+
+    # =====================================================
+    # РЯДОК ЦІНИ
     # =====================================================
 
     if discount is not None:
@@ -401,33 +527,14 @@ def create_caption(text):
             0,
         )
 
-        new_price = round(
-            price * (
-                1 - new_discount / 100
-            )
-        )
-
         price_line = (
             f"<i>🏷️{price:g}€-%={new_price}€</i>"
         )
 
-    # =====================================================
-    # Якщо знижки немає
-    # =====================================================
-
     else:
 
-        if price <= 1000:
-
-            new_price = round(
-                price + 100
-            )
-
-        else:
-
-            new_price = round(
-                price * 1.15
-            )
+        # Якщо немає знижки,
+        # показуємо тільки кінцеву ціну
 
         price_line = (
             f"<i>🏷️{new_price}€</i>"
@@ -442,6 +549,185 @@ def create_caption(text):
         f"<i>💌@irasavchenkoo</i>"
     )
 
+
+# =========================================================
+# GET PRICE INFO
+# =========================================================
+
+def get_price_info(text):
+
+    price = find_price(text)
+    discount = find_discount(text)
+
+    return price, discount
+
+
+# =========================================================
+# BUILD MANUAL CAPTION
+# =========================================================
+
+def replace_price_in_caption(
+    caption,
+    new_price,
+):
+
+    pattern = (
+        r"<i>🏷️.*?</i>"
+    )
+
+    replacement = (
+        f"<i>🏷️{new_price}€</i>"
+    )
+
+    return re.sub(
+        pattern,
+        replacement,
+        caption,
+        count=1,
+    )
+
+
+# =========================================================
+# CALLBACK BUTTONS
+# =========================================================
+
+async def handle_price_button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if user_id not in ALLOWED_USERS:
+        return
+
+    data = query.data
+
+    if not data.startswith(
+        "price|"
+    ):
+        return
+
+    parts = data.split("|")
+
+    if len(parts) != 4:
+        return
+
+    action = parts[1]
+    price = float(parts[2])
+    discount_text = parts[3]
+
+    if discount_text == "none":
+
+        discount = None
+
+    else:
+
+        discount = int(
+            discount_text
+        )
+
+    # =====================================================
+    # РОЗРАХУНОК
+    # =====================================================
+
+    if action == "auto":
+
+        new_price = calculate_auto_price(
+            price,
+            discount,
+        )
+
+    elif action == "100":
+
+        new_price = round(
+            price + 100
+        )
+
+    elif action == "150":
+
+        new_price = round(
+            price + 150
+        )
+
+    elif action == "15p":
+
+        new_price = round(
+            price * 1.15
+        )
+
+    elif action == "10p":
+
+        new_price = round(
+            price * 1.10
+        )
+
+    else:
+
+        return
+
+    # =====================================================
+    # ОНОВЛЮЄМО CAPTION
+    # =====================================================
+
+    message = query.message
+
+    if not message:
+        return
+
+    if message.caption:
+
+        new_caption = replace_price_in_caption(
+            message.caption,
+            new_price,
+        )
+
+        try:
+
+            await message.edit_caption(
+                caption=new_caption,
+                parse_mode="HTML",
+                reply_markup=price_keyboard(
+                    price,
+                    discount,
+                ),
+            )
+
+        except Exception as error:
+
+            logging.error(
+                f"Caption edit error: {error}"
+            )
+
+    elif message.text:
+
+        new_text = replace_price_in_caption(
+            message.text,
+            new_price,
+        )
+
+        try:
+
+            await message.edit_text(
+                text=new_text,
+                parse_mode="HTML",
+                reply_markup=price_keyboard(
+                    price,
+                    discount,
+                ),
+            )
+
+        except Exception as error:
+
+            logging.error(
+                f"Text edit error: {error}"
+            )
+
+
 # =========================================================
 # SEND PHOTO
 # =========================================================
@@ -455,11 +741,26 @@ async def send_photo(
         text
     )
 
+    price, discount = get_price_info(
+        text
+    )
+
+    keyboard = None
+
+    if price is not None:
+
+        keyboard = price_keyboard(
+            price,
+            discount,
+        )
+
     await message.reply_photo(
         photo=message.photo[-1].file_id,
         caption=caption,
         parse_mode="HTML",
+        reply_markup=keyboard,
     )
+
 
 # =========================================================
 # SEND VIDEO
@@ -474,11 +775,26 @@ async def send_video(
         text
     )
 
+    price, discount = get_price_info(
+        text
+    )
+
+    keyboard = None
+
+    if price is not None:
+
+        keyboard = price_keyboard(
+            price,
+            discount,
+        )
+
     await message.reply_video(
         video=message.video.file_id,
         caption=caption,
         parse_mode="HTML",
+        reply_markup=keyboard,
     )
+
 
 # =========================================================
 # WAIT FOR TEXT AFTER MEDIA
@@ -499,7 +815,6 @@ async def wait_for_text(
     if not pending:
         return
 
-    # Якщо за 5 секунд текст так і не прийшов
     pending_media.pop(
         user_id,
         None,
@@ -508,6 +823,7 @@ async def wait_for_text(
     await message.reply_text(
         "⚠️ Не знайшов текст із брендом, ціною та знижкою."
     )
+
 
 # =========================================================
 # ALBUM
@@ -541,8 +857,9 @@ async def process_album(
 
             break
 
-    # Якщо caption немає — чекаємо
-    # окреме текстове повідомлення
+    # Якщо caption немає —
+    # чекаємо окреме текстове повідомлення
+
     if not source_text:
 
         first_message = messages[0]
@@ -563,6 +880,10 @@ async def process_album(
         return
 
     caption = create_caption(
+        source_text
+    )
+
+    price, discount = get_price_info(
         source_text
     )
 
@@ -623,6 +944,8 @@ async def process_album(
     if not media:
         return
 
+    sent_messages = []
+
     for start in range(
         0,
         len(media),
@@ -633,9 +956,40 @@ async def process_album(
             start:start + 10
         ]
 
-        await messages[0].reply_media_group(
+        result = await messages[0].reply_media_group(
             media=chunk
         )
+
+        sent_messages.extend(
+            result
+        )
+
+    # =====================================================
+    # КНОПКИ ПІД ПЕРШИМ ФОТО АЛЬБОМУ
+    # =====================================================
+
+    if (
+        sent_messages
+        and price is not None
+    ):
+
+        try:
+
+            await sent_messages[0].edit_caption(
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=price_keyboard(
+                    price,
+                    discount,
+                ),
+            )
+
+        except Exception as error:
+
+            logging.error(
+                f"Album button error: {error}"
+            )
+
 
 # =========================================================
 # MAIN HANDLER
@@ -652,11 +1006,12 @@ async def handle_message(
         return
 
     user_id = message.from_user.id
+
     if user_id not in ALLOWED_USERS:
         return
 
     # =====================================================
-    # Якщо це текст після фото/відео
+    # ТЕКСТ ПІСЛЯ ФОТО / ВІДЕО
     # =====================================================
 
     if message.text:
@@ -674,9 +1029,9 @@ async def handle_message(
 
             text = message.text
 
-            # ---------------------------------------------
+            # -------------------------------------------------
             # Одне фото
-            # ---------------------------------------------
+            # -------------------------------------------------
 
             if pending["type"] == "photo":
 
@@ -687,9 +1042,9 @@ async def handle_message(
 
                 return
 
-            # ---------------------------------------------
+            # -------------------------------------------------
             # Одне відео
-            # ---------------------------------------------
+            # -------------------------------------------------
 
             if pending["type"] == "video":
 
@@ -700,9 +1055,9 @@ async def handle_message(
 
                 return
 
-            # ---------------------------------------------
+            # -------------------------------------------------
             # Альбом
-            # ---------------------------------------------
+            # -------------------------------------------------
 
             if pending["type"] == "album":
 
@@ -711,6 +1066,10 @@ async def handle_message(
                 ]
 
                 caption = create_caption(
+                    text
+                )
+
+                price, discount = get_price_info(
                     text
                 )
 
@@ -768,6 +1127,8 @@ async def handle_message(
                                 )
                             )
 
+                sent_messages = []
+
                 for start in range(
                     0,
                     len(media),
@@ -778,22 +1139,65 @@ async def handle_message(
                         start:start + 10
                     ]
 
-                    await messages[0].reply_media_group(
+                    result = await messages[0].reply_media_group(
                         media=chunk
                     )
 
+                    sent_messages.extend(
+                        result
+                    )
+
+                # Додаємо кнопки під першим фото
+
+                if (
+                    sent_messages
+                    and price is not None
+                ):
+
+                    try:
+
+                        await sent_messages[0].edit_caption(
+                            caption=caption,
+                            parse_mode="HTML",
+                            reply_markup=price_keyboard(
+                                price,
+                                discount,
+                            ),
+                        )
+
+                    except Exception as error:
+
+                        logging.error(
+                            f"Album button error: {error}"
+                        )
+
                 return
 
-        # Якщо немає фото/відео, просто
-        # обробляємо звичайний текст
+        # =================================================
+        # Звичайний текст
+        # =================================================
 
         caption = create_caption(
             message.text
         )
 
+        price, discount = get_price_info(
+            message.text
+        )
+
+        keyboard = None
+
+        if price is not None:
+
+            keyboard = price_keyboard(
+                price,
+                discount,
+            )
+
         await message.reply_text(
             caption,
             parse_mode="HTML",
+            reply_markup=keyboard,
         )
 
         return
@@ -814,7 +1218,9 @@ async def handle_message(
             message
         )
 
-        if len(albums[group_id]) == 1:
+        if len(
+            albums[group_id]
+        ) == 1:
 
             asyncio.create_task(
                 process_album(
@@ -830,7 +1236,9 @@ async def handle_message(
 
     if message.photo:
 
-        # Якщо caption вже є — працюємо одразу
+        # Якщо caption вже є —
+        # працюємо одразу
+
         if message.caption:
 
             await send_photo(
@@ -842,6 +1250,7 @@ async def handle_message(
 
         # Якщо caption немає —
         # запам'ятовуємо фото
+
         pending_media[user_id] = {
             "message": message,
             "type": "photo",
@@ -883,6 +1292,7 @@ async def handle_message(
 
         return
 
+
 # =========================================================
 # START
 # =========================================================
@@ -902,6 +1312,15 @@ def main():
         .build()
     )
 
+    # Кнопки
+    application.add_handler(
+        CallbackQueryHandler(
+            handle_price_button,
+            pattern=r"^price\|",
+        )
+    )
+
+    # Повідомлення
     application.add_handler(
         MessageHandler(
             filters.PHOTO
@@ -916,6 +1335,7 @@ def main():
     )
 
     application.run_polling()
+
 
 if __name__ == "__main__":
 
