@@ -680,7 +680,6 @@ async def handle_price_button(
     user_id = query.from_user.id
 
     if user_id not in ALLOWED_USERS:
-
         await query.answer()
         return
 
@@ -693,7 +692,8 @@ async def handle_price_button(
     parts = data.split("|")
 
     # =====================================================
-    # ЗВИЧАЙНЕ ФОТО / ВІДЕО
+    # ЗВИЧАЙНЕ ФОТО / ВІДЕО / ТЕКСТ
+    #
     # price|action|price|discount
     # =====================================================
 
@@ -755,7 +755,6 @@ async def handle_price_button(
         message = query.message
 
         if not message:
-
             await query.answer()
             return
 
@@ -894,6 +893,10 @@ async def handle_price_button(
 
                 discount = None
 
+        # =================================================
+        # РАХУЄМО НОВУ ЦІНУ
+        # =================================================
+
         new_price = calculate_button_price(
             action,
             price,
@@ -909,69 +912,41 @@ async def handle_price_button(
 
         chat_id = query.message.chat_id
 
-        try:
+        # =================================================
+        # БЕРЕМО ЗБЕРЕЖЕНИЙ CAPTION АЛЬБОМУ
+        # =================================================
 
-            target_message = (
-                await context.bot.get_messages(
-                    chat_id=chat_id,
-                    message_ids=[target_message_id],
-                )
+        storage_key = (
+            f"album_caption_{chat_id}_{target_message_id}"
+        )
+
+        original_caption = (
+            context.application.bot_data.get(
+                storage_key
             )
+        )
 
-        except Exception:
-            target_message = None
+        if not original_caption:
 
-        # get_messages може бути недоступним
-        # у поточній версії API, тому працюємо
-        # напряму через edit_message_caption.
+            await query.answer(
+                "Не вдалося знайти підпис альбому."
+            )
+            return
+
+        # =================================================
+        # ЗМІНЮЄМО ТІЛЬКИ ЦІНУ
+        # =================================================
+
+        new_caption = replace_price_in_caption(
+            original_caption,
+            new_price,
+        )
+
+        # =================================================
+        # ОНОВЛЮЄМО ПЕРШЕ ФОТО АЛЬБОМУ
+        # =================================================
 
         try:
-
-            # Спочатку отримуємо caption
-            # з повідомлення через локальне
-            # збереження нижче.
-            album_caption = None
-
-            for stored in albums.values():
-
-                for item in stored:
-
-                    if item.message_id == target_message_id:
-
-                        album_caption = item.caption
-                        break
-
-                if album_caption:
-                    break
-
-            # Якщо локально не знайшли,
-            # беремо caption із callback message,
-            # якщо це можливо.
-            if not album_caption:
-
-                album_caption = query.message.text
-
-            if not album_caption:
-
-                # У fallback-повідомленні caption
-                # може бути відсутній.
-                # Тоді використовуємо збережений
-                # caption у bot_data.
-                album_caption = context.application.bot_data.get(
-                    f"album_caption_{chat_id}_{target_message_id}"
-                )
-
-            if not album_caption:
-
-                await query.answer(
-                    "Не вдалося знайти caption альбому."
-                )
-                return
-
-            new_caption = replace_price_in_caption(
-                album_caption,
-                new_price,
-            )
 
             await context.bot.edit_message_caption(
                 chat_id=chat_id,
@@ -980,24 +955,12 @@ async def handle_price_button(
                 parse_mode="HTML",
             )
 
-            # Оновлюємо кнопки в окремому
-            # повідомленні під альбомом.
-            try:
-
-                await query.message.edit_text(
-                    text="💰 Керування ціною",
-                    reply_markup=price_keyboard(
-                        price,
-                        discount,
-                        album_message_id=target_message_id,
-                    ),
-                )
-
-            except Exception as error:
-
-                logging.error(
-                    f"Album control edit error: {error}"
-                )
+            # Зберігаємо новий caption,
+            # щоб наступне натискання теж
+            # працювало коректно
+            context.application.bot_data[
+                storage_key
+            ] = new_caption
 
             await query.answer(
                 f"Ціна: {new_price}€"
@@ -1006,7 +969,7 @@ async def handle_price_button(
         except Exception as error:
 
             logging.error(
-                f"Album price edit error: {error}"
+                f"Album caption edit error: {error}"
             )
 
             await query.answer(
@@ -1016,7 +979,6 @@ async def handle_price_button(
         return
 
     await query.answer()
-
 
 # =========================================================
 # SEND PHOTO
@@ -1126,8 +1088,12 @@ def save_album_caption(
     caption,
 ):
 
-    context.application.bot_data[
+    storage_key = (
         f"album_caption_{chat_id}_{message_id}"
+    )
+
+    context.application.bot_data[
+        storage_key
     ] = caption
 
 
