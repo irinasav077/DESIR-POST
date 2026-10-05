@@ -372,10 +372,9 @@ def normalize_sizes(text):
 
 # =========================================================
 # CAPTION
-# =========================================================
+# =========================================================def create_caption(text):
 
 def create_caption(text):
-
     price = find_price(text)
     discount = find_discount(text)
     brand = find_brand(text)
@@ -387,47 +386,52 @@ def create_caption(text):
             "<i>⚠️ Не вдалося знайти ціну.</i>"
         )
 
-    if discount is not None:
-
-        new_discount = max(
-        discount - 10,
-        0,
-    )
-
-    new_price = round(
-        price * (
-            1 - new_discount / 100
-        )
-    )
-
-   else:
-
-    if price <= 1000:
-
-        new_price = round(
-            price + 100
-        )
-
-    else:
-
-        new_price = round(
-            price * 1.15
-        )
-
     if not brand:
 
         brand = "brand"
 
-    new_discount = max(
-        discount - 10,
-        0,
-    )
+    # =====================================================
+    # Якщо знижка є
+    # =====================================================
 
-    new_price = round(
-        price * (
-            1 - new_discount / 100
+    if discount is not None:
+
+        new_discount = max(
+            discount - 10,
+            0,
         )
-    )
+
+        new_price = round(
+            price * (
+                1 - new_discount / 100
+            )
+        )
+
+        price_line = (
+            f"<i>🏷️{price:g}€-%={new_price}€</i>"
+        )
+
+    # =====================================================
+    # Якщо знижки немає
+    # =====================================================
+
+    else:
+
+        if price <= 1000:
+
+            new_price = round(
+                price + 100
+            )
+
+        else:
+
+            new_price = round(
+                price * 1.15
+            )
+
+        price_line = (
+            f"<i>🏷️{price:g}€={new_price}€</i>"
+        )
 
     return (
         f"<i>#{brand}</i>\n"
