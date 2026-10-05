@@ -389,7 +389,7 @@ def create_caption(text):
 
     if discount is not None:
 
-    new_discount = max(
+        new_discount = max(
         discount - 10,
         0,
     )
