@@ -436,13 +436,10 @@ def price_keyboard(
     # Для звичайного фото/відео
     prefix = "price"
 
-    # Для альбому:
-    # передаємо ID першого повідомлення
-    # альбому, щоб callback знав,
-    # caption якого треба змінити
+    # Для альбому
     if album_message_id is not None:
 
-        prefix = f"album"
+        prefix = "album"
 
     if album_message_id is None:
 
@@ -561,10 +558,13 @@ def get_price_info(text):
 # RESTORE ITALIC CAPTION
 # =========================================================
 
-def make_italic_caption(caption):
+def make_italic_caption(
+    caption,
+):
 
-    # Повністю прибираємо існуючі HTML-теги
-    # перед повторним форматуванням
+    # Прибираємо існуючі HTML-теги,
+    # щоб вони не вкладалися один в один.
+
     clean_caption = re.sub(
         r"<[^>]+>",
         "",
@@ -591,6 +591,7 @@ def make_italic_caption(caption):
 
     return "\n".join(result)
 
+
 # =========================================================
 # REPLACE PRICE
 # =========================================================
@@ -600,8 +601,9 @@ def replace_price_in_caption(
     new_price,
 ):
 
-    # Прибираємо HTML перед обробкою,
-    # щоб не створювати вкладені <i>
+    # Спочатку прибираємо HTML,
+    # щоб не створювати вкладені <i>.
+
     clean_caption = re.sub(
         r"<[^>]+>",
         "",
@@ -613,6 +615,7 @@ def replace_price_in_caption(
     )
 
     # Замінюємо тільки рядок з 🏷️
+
     pattern = r"🏷️[^\n]*"
 
     replacement = (
@@ -673,6 +676,26 @@ def calculate_button_price(
         )
 
     return None
+
+
+# =========================================================
+# SAVE ALBUM CAPTION
+# =========================================================
+
+def save_album_caption(
+    context,
+    chat_id,
+    message_id,
+    caption,
+):
+
+    storage_key = (
+        f"album_caption_{chat_id}_{message_id}"
+    )
+
+    context.application.bot_data[
+        storage_key
+    ] = caption
 
 
 # =========================================================
@@ -969,7 +992,8 @@ async def handle_price_button(
 
             # Зберігаємо новий caption,
             # щоб наступне натискання теж
-            # працювало коректно
+            # працювало коректно.
+
             context.application.bot_data[
                 storage_key
             ] = new_caption
@@ -991,6 +1015,7 @@ async def handle_price_button(
         return
 
     await query.answer()
+
 
 # =========================================================
 # SEND PHOTO
@@ -1090,49 +1115,6 @@ async def wait_for_text(
 
 
 # =========================================================
-# SAVE ALBUM CAPTION
-# =========================================================
-
-def save_album_caption(
-    context,
-    chat_id,
-    message_id,
-    caption,
-):
-
-    storage_key = (
-        f"album_caption_{chat_id}_{message_id}"
-    )
-
-    context.application.bot_data[
-        storage_key
-    ] = caption
-
-
-# =========================================================
-# SEND ALBUM CONTROLS
-# =========================================================
-
-async def send_album_controls(
-    context,
-    chat_id,
-    target_message_id,
-    price,
-    discount,
-):
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="💰 Керування ціною",
-        reply_markup=price_keyboard(
-            price,
-            discount,
-            album_message_id=target_message_id,
-        ),
-    )
-
-
-# =========================================================
 # ALBUM
 # =========================================================
 
@@ -1141,6 +1123,8 @@ async def process_album(
     context,
 ):
 
+    # Чекаємо, поки Telegram передасть
+    # усі фотографії саме цього альбому.
     await asyncio.sleep(2)
 
     messages = albums.pop(
@@ -1166,7 +1150,7 @@ async def process_album(
             break
 
     # Якщо caption немає —
-    # чекаємо окреме текстове повідомлення
+    # чекаємо окреме текстове повідомлення.
 
     if not source_text:
 
@@ -1254,6 +1238,9 @@ async def process_album(
 
     sent_messages = []
 
+    # Telegram дозволяє максимум 10 медіа
+    # в одному media group.
+
     for start in range(
         0,
         len(media),
@@ -1273,7 +1260,7 @@ async def process_album(
         )
 
     # =====================================================
-    # КНОПКИ ДЛЯ АЛЬБОМУ
+    # КНОПКА ПРЯМО НА ПЕРШОМУ ПОВІДОМЛЕННІ АЛЬБОМУ
     # =====================================================
 
     if (
@@ -1283,7 +1270,9 @@ async def process_album(
 
         first_sent = sent_messages[0]
 
-        # Зберігаємо caption для callback
+        # Зберігаємо caption саме під ID
+        # першого повідомлення цього альбому.
+
         save_album_caption(
             context,
             first_sent.chat_id,
@@ -1291,14 +1280,28 @@ async def process_album(
             caption,
         )
 
-        # Кнопки окремим повідомленням
-        await send_album_controls(
-            context,
-            first_sent.chat_id,
-            first_sent.message_id,
-            price,
-            discount,
-        )
+        # ВАЖЛИВО:
+        # більше НЕ створюємо окреме повідомлення
+        # "💰 Керування ціною".
+        #
+        # Кнопка прикріплюється безпосередньо
+        # до першого фото/відео альбому.
+
+        try:
+
+            await first_sent.edit_reply_markup(
+                reply_markup=price_keyboard(
+                    price,
+                    discount,
+                    album_message_id=first_sent.message_id,
+                )
+            )
+
+        except Exception as error:
+
+            logging.error(
+                f"Album keyboard error: {error}"
+            )
 
 
 # =========================================================
@@ -1415,9 +1418,7 @@ async def handle_message(
 
                     elif item.video:
 
-                        file_id = (
-                            item.video.file_id
-                        )
+                        file_id = item.video.file_id
 
                         if index == 0:
 
@@ -1458,7 +1459,7 @@ async def handle_message(
                     )
 
                 # =================================================
-                # КНОПКИ ДЛЯ АЛЬБОМУ
+                # КНОПКА БЕЗПОСЕРЕДНЬО НА ПЕРШОМУ ФОТО
                 # =================================================
 
                 if (
@@ -1475,13 +1476,21 @@ async def handle_message(
                         caption,
                     )
 
-                    await send_album_controls(
-                        context,
-                        first_sent.chat_id,
-                        first_sent.message_id,
-                        price,
-                        discount,
-                    )
+                    try:
+
+                        await first_sent.edit_reply_markup(
+                            reply_markup=price_keyboard(
+                                price,
+                                discount,
+                                album_message_id=first_sent.message_id,
+                            )
+                        )
+
+                    except Exception as error:
+
+                        logging.error(
+                            f"Album keyboard error: {error}"
+                        )
 
                 return
 
@@ -1529,6 +1538,9 @@ async def handle_message(
         albums[group_id].append(
             message
         )
+
+        # Окрема задача для КОЖНОГО media_group_id.
+        # Тому кілька альбомів не змішуються.
 
         if len(
             albums[group_id]
