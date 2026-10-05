@@ -430,7 +430,7 @@ def create_caption(text):
             )
 
         price_line = (
-            f"<i>🏷️{price:g}€={new_price}€</i>"
+            f"<i>🏷️{new_price}€</i>"
         )
 
     return (
