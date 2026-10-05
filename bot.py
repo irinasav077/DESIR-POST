@@ -387,10 +387,31 @@ def create_caption(text):
             "<i>⚠️ Не вдалося знайти ціну.</i>"
         )
 
-    if discount is None:
+    if discount is not None:
 
-        return (
-            "<i>⚠️ Не вдалося знайти знижку.</i>"
+    new_discount = max(
+        discount - 10,
+        0,
+    )
+
+    new_price = round(
+        price * (
+            1 - new_discount / 100
+        )
+    )
+
+else:
+
+    if price <= 1000:
+
+        new_price = round(
+            price + 100
+        )
+
+    else:
+
+        new_price = round(
+            price * 1.15
         )
 
     if not brand:
@@ -411,7 +432,7 @@ def create_caption(text):
     return (
         f"<i>#{brand}</i>\n"
         f"<i>{sizes}</i>\n\n"
-        f"<i>🏷️{price:g}€-%={new_price}€</i>\n"
+        f"{price_line}\n"
         f"<i>+ доставка 📦</i>\n\n"
         f"<i>Для консультації та замовлення:</i>\n"
         f"<i>💌@irasavchenkoo</i>"
