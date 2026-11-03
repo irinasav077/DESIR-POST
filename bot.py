@@ -46,16 +46,9 @@ pending_media = {}
 def find_price(text):
 
     patterns = [
-        # 1.200€ / 3.500€ / 1,200€
         r"(\d{1,3}(?:[.,]\d{3})+)\s*€",
-
-        # 1200€ / 3500€ / 1200,50€
         r"(\d+(?:[.,]\d+)?)\s*€",
-
-        # 1.200 - 20% / 3.500 - 30%
         r"(\d{1,3}(?:[.,]\d{3})+)\s*[-–—]\s*\d+\s*%",
-
-        # 1200 - 20% / 3500 - 30%
         r"(\d+(?:[.,]\d+)?)\s*[-–—]\s*\d+\s*%",
     ]
 
@@ -159,16 +152,47 @@ def find_brand(text):
         if line.strip()
     ]
 
-    # Hashtag
+    # -----------------------------------------------------
+    # Hashtag + назва бренду
+    # -----------------------------------------------------
+
     for line in lines:
 
-        if line.startswith("#"):
+        hashtags = re.findall(
+            r"#([a-zа-яіїєґ0-9_-]+)",
+            line,
+            re.IGNORECASE,
+        )
 
+        if hashtags:
+
+            # Прибираємо всі хештеги з рядка
+            text_without_hashtags = re.sub(
+                r"#[a-zа-яіїєґ0-9_-]+",
+                "",
+                line,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            # Якщо після видалення хештегів
+            # залишилася назва бренду —
+            # використовуємо саме її
+            if text_without_hashtags:
+
+                return clean_brand(
+                    text_without_hashtags
+                )
+
+            # Якщо є тільки хештег —
+            # використовуємо його
             return clean_brand(
-                line.split()[0]
+                hashtags[0]
             )
 
-    # Назва бренду
+    # -----------------------------------------------------
+    # Звичайна назва бренду без хештега
+    # -----------------------------------------------------
+
     for line in lines:
 
         if re.search(
@@ -433,16 +457,11 @@ def price_keyboard(
         round(price, 2)
     )
 
-    # Для звичайного фото/відео
     prefix = "price"
 
-    # Для альбому:
-    # передаємо ID першого повідомлення
-    # альбому, щоб callback знав,
-    # caption якого треба змінити
     if album_message_id is not None:
 
-        prefix = f"album"
+        prefix = "album"
 
     if album_message_id is None:
 
@@ -563,8 +582,6 @@ def get_price_info(text):
 
 def make_italic_caption(caption):
 
-    # Повністю прибираємо існуючі HTML-теги
-    # перед повторним форматуванням
     clean_caption = re.sub(
         r"<[^>]+>",
         "",
@@ -591,6 +608,7 @@ def make_italic_caption(caption):
 
     return "\n".join(result)
 
+
 # =========================================================
 # REPLACE PRICE
 # =========================================================
@@ -600,8 +618,6 @@ def replace_price_in_caption(
     new_price,
 ):
 
-    # Прибираємо HTML перед обробкою,
-    # щоб не створювати вкладені <i>
     clean_caption = re.sub(
         r"<[^>]+>",
         "",
@@ -612,7 +628,6 @@ def replace_price_in_caption(
         clean_caption
     )
 
-    # Замінюємо тільки рядок з 🏷️
     pattern = r"🏷️[^\n]*"
 
     replacement = (
@@ -705,8 +720,6 @@ async def handle_price_button(
 
     # =====================================================
     # ЗВИЧАЙНЕ ФОТО / ВІДЕО / ТЕКСТ
-    #
-    # price|action|price|discount
     # =====================================================
 
     if parts[0] == "price":
@@ -846,8 +859,6 @@ async def handle_price_button(
 
     # =====================================================
     # АЛЬБОМ
-    #
-    # album|action|message_id|price|discount
     # =====================================================
 
     if parts[0] == "album":
@@ -905,10 +916,6 @@ async def handle_price_button(
 
                 discount = None
 
-        # =================================================
-        # РАХУЄМО НОВУ ЦІНУ
-        # =================================================
-
         new_price = calculate_button_price(
             action,
             price,
@@ -923,10 +930,6 @@ async def handle_price_button(
             return
 
         chat_id = query.message.chat_id
-
-        # =================================================
-        # БЕРЕМО ЗБЕРЕЖЕНИЙ CAPTION АЛЬБОМУ
-        # =================================================
 
         storage_key = (
             f"album_caption_{chat_id}_{target_message_id}"
@@ -945,18 +948,10 @@ async def handle_price_button(
             )
             return
 
-        # =================================================
-        # ЗМІНЮЄМО ТІЛЬКИ ЦІНУ
-        # =================================================
-
         new_caption = replace_price_in_caption(
             original_caption,
             new_price,
         )
-
-        # =================================================
-        # ОНОВЛЮЄМО ПЕРШЕ ФОТО АЛЬБОМУ
-        # =================================================
 
         try:
 
@@ -967,9 +962,6 @@ async def handle_price_button(
                 parse_mode="HTML",
             )
 
-            # Зберігаємо новий caption,
-            # щоб наступне натискання теж
-            # працювало коректно
             context.application.bot_data[
                 storage_key
             ] = new_caption
@@ -991,6 +983,7 @@ async def handle_price_button(
         return
 
     await query.answer()
+
 
 # =========================================================
 # SEND PHOTO
@@ -1165,9 +1158,6 @@ async def process_album(
 
             break
 
-    # Якщо caption немає —
-    # чекаємо окреме текстове повідомлення
-
     if not source_text:
 
         first_message = messages[0]
@@ -1272,10 +1262,6 @@ async def process_album(
             result
         )
 
-    # =====================================================
-    # КНОПКИ ДЛЯ АЛЬБОМУ
-    # =====================================================
-
     if (
         sent_messages
         and price is not None
@@ -1283,7 +1269,6 @@ async def process_album(
 
         first_sent = sent_messages[0]
 
-        # Зберігаємо caption для callback
         save_album_caption(
             context,
             first_sent.chat_id,
@@ -1291,7 +1276,6 @@ async def process_album(
             caption,
         )
 
-        # Кнопки окремим повідомленням
         await send_album_controls(
             context,
             first_sent.chat_id,
@@ -1456,10 +1440,6 @@ async def handle_message(
                     sent_messages.extend(
                         result
                     )
-
-                # =================================================
-                # КНОПКИ ДЛЯ АЛЬБОМУ
-                # =================================================
 
                 if (
                     sent_messages
