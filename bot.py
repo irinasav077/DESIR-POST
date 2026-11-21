@@ -719,7 +719,9 @@ async def get_ai_extra(
         text
     )
 
-    if brand and price is not None and detect_category(text) in ("shoe", "bag"):
+    # Якщо бренд і ціна вже написані вручну, AI не запускаємо взагалі.
+    # Категорію визначаємо з тексту; розрахунок робить звичайний код.
+    if brand and price is not None:
         return None, []
 
     ai_data = await analyze_photos(
