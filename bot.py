@@ -20,6 +20,12 @@ from telegram.ext import (
     filters,
 )
 
+from ai_vision import (
+    AI_ENABLED,
+    analyze_photos,
+    resolve_ai_fields,
+)
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -30,6 +36,16 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ALLOWED_USERS = [
     493563129
 ]
+
+# Скільки секунд чекаємо текст після фото / альбому без підпису
+PENDING_WAIT_SECONDS = 5
+ALBUM_WAIT_SECONDS = 2
+
+# Як AI називає бренд -> як ти пишеш хештег. Додавай свої.
+BRAND_ALIASES = {
+    "saintlaurent": "ysl",
+    "yvessaintlaurent": "ysl",
+}
 
 # =========================================================
 # STORAGE
@@ -517,15 +533,59 @@ def price_keyboard(
 
 
 # =========================================================
-# CREATE CAPTION
+# FIELDS: ТЕКСТ (пріоритет) + AI (лише те, чого бракує)
 # =========================================================
 
-def create_caption(text):
+def collect_fields(
+    text,
+    extra=None,
+):
 
     price = find_price(text)
     discount = find_discount(text)
     brand = find_brand(text)
     sizes = normalize_sizes(text)
+
+    # extra - дані з фото. Вони лише ДОПОВНЮЮТЬ текст:
+    # те, що ти написала вручну, ніколи не замінюється.
+    if extra:
+
+        if price is None:
+            price = extra.get("price")
+
+        if discount is None:
+            discount = extra.get("discount")
+
+        if not brand and extra.get("brand"):
+
+            brand = clean_brand(
+                extra["brand"]
+            )
+
+            brand = BRAND_ALIASES.get(
+                brand,
+                brand,
+            )
+
+        if not sizes and extra.get("sizes"):
+            sizes = extra["sizes"]
+
+    return price, discount, brand, sizes
+
+
+# =========================================================
+# CREATE CAPTION
+# =========================================================
+
+def create_caption(
+    text,
+    extra=None,
+):
+
+    price, discount, brand, sizes = collect_fields(
+        text,
+        extra,
+    )
 
     if price is None:
 
@@ -568,12 +628,90 @@ def create_caption(text):
 # GET PRICE INFO
 # =========================================================
 
-def get_price_info(text):
+def get_price_info(
+    text,
+    extra=None,
+):
 
-    price = find_price(text)
-    discount = find_discount(text)
+    price, discount, _brand, _sizes = collect_fields(
+        text,
+        extra,
+    )
 
     return price, discount
+
+
+# =========================================================
+# AI: ДАНІ З ФОТО
+# =========================================================
+
+async def get_ai_extra(
+    text,
+    photo_messages,
+):
+    """
+    Повертає (extra, notes).
+    AI викликається ТІЛЬКИ якщо в тексті немає бренду або ціни.
+    Якщо AI вимкнений чи не зміг прочитати фото - (None, [...]),
+    і далі працює твоя звичайна логіка по тексту.
+    """
+
+    if not AI_ENABLED:
+        return None, []
+
+    if not any(
+        getattr(m, "photo", None)
+        for m in photo_messages
+    ):
+        return None, []
+
+    price, discount, brand, sizes = collect_fields(
+        text
+    )
+
+    if brand and price is not None:
+        return None, []
+
+    ai_data = await analyze_photos(
+        photo_messages
+    )
+
+    if ai_data is None:
+
+        return None, [
+            "⚠️ AI не зміг прочитати фото — використано лише текст."
+        ]
+
+    return resolve_ai_fields(
+        {
+            "price": price,
+            "discount": discount,
+            "brand": brand,
+            "sizes": sizes,
+        },
+        ai_data,
+    )
+
+
+async def send_ai_notes(
+    message,
+    notes,
+):
+
+    if not notes:
+        return
+
+    try:
+
+        await message.reply_text(
+            "\n".join(notes)
+        )
+
+    except Exception as error:
+
+        logging.error(
+            f"AI notes error: {error}"
+        )
 
 
 # =========================================================
@@ -992,14 +1130,26 @@ async def handle_price_button(
 async def send_photo(
     message,
     text,
+    ai=None,
 ):
 
+    if ai is None:
+
+        ai = await get_ai_extra(
+            text,
+            [message],
+        )
+
+    extra, notes = ai
+
     caption = create_caption(
-        text
+        text,
+        extra,
     )
 
     price, discount = get_price_info(
-        text
+        text,
+        extra,
     )
 
     keyboard = None
@@ -1016,6 +1166,11 @@ async def send_photo(
         caption=caption,
         parse_mode="HTML",
         reply_markup=keyboard,
+    )
+
+    await send_ai_notes(
+        message,
+        notes,
     )
 
 
@@ -1057,11 +1212,101 @@ async def send_video(
 # WAIT FOR TEXT AFTER MEDIA
 # =========================================================
 
-async def wait_for_text(
+def is_same_pending(
+    pending,
     message,
 ):
 
-    await asyncio.sleep(5)
+    if pending.get("message") is message:
+        return True
+
+    messages = pending.get("messages")
+
+    return bool(messages) and messages[0] is message
+
+
+async def handle_pending_timeout(
+    pending,
+    context,
+):
+    """
+    Текст так і не прийшов. Фото / альбом - пробуємо прочитати AI.
+    Якщо AI вимкнений, не зміг або ціни ніде немає - як і раніше,
+    повідомляємо, що не знайшли дані.
+    """
+
+    if pending["type"] == "photo":
+
+        messages = [pending["message"]]
+
+    elif pending["type"] == "album":
+
+        messages = pending["messages"]
+
+    else:
+
+        messages = []
+
+    first_message = (
+        pending.get("message")
+        or pending["messages"][0]
+    )
+
+    extra, notes = None, []
+
+    if messages:
+
+        extra, notes = await get_ai_extra(
+            "",
+            messages,
+        )
+
+    if extra and extra.get("price") is not None:
+
+        if pending["type"] == "photo":
+
+            await send_photo(
+                pending["message"],
+                "",
+                ai=(extra, notes),
+            )
+
+        else:
+
+            await send_album(
+                messages,
+                "",
+                context,
+                ai=(extra, notes),
+            )
+
+        return
+
+    if AI_ENABLED and messages:
+
+        warning = (
+            "⚠️ Не знайшов ціну ні в тексті, ні на фото."
+        )
+
+    else:
+
+        warning = (
+            "⚠️ Не знайшов текст із брендом, ціною та знижкою."
+        )
+
+    await first_message.reply_text(
+        "\n".join([warning] + notes)
+    )
+
+
+async def wait_for_text(
+    message,
+    context=None,
+):
+
+    await asyncio.sleep(
+        PENDING_WAIT_SECONDS
+    )
 
     user_id = message.from_user.id
 
@@ -1072,13 +1317,21 @@ async def wait_for_text(
     if not pending:
         return
 
+    # У черзі вже інше (новіше) медіа - це чекання не наше
+    if not is_same_pending(
+        pending,
+        message,
+    ):
+        return
+
     pending_media.pop(
         user_id,
         None,
     )
 
-    await message.reply_text(
-        "⚠️ Не знайшов текст із брендом, ціною та знижкою."
+    await handle_pending_timeout(
+        pending,
+        context,
     )
 
 
@@ -1126,63 +1379,33 @@ async def send_album_controls(
 
 
 # =========================================================
-# ALBUM
+# SEND ALBUM (спільна логіка: підпис в альбомі / текст після альбому)
 # =========================================================
 
-async def process_album(
-    group_id,
+async def send_album(
+    messages,
+    text,
     context,
+    ai=None,
 ):
 
-    await asyncio.sleep(2)
+    if ai is None:
 
-    messages = albums.pop(
-        group_id,
-        [],
-    )
-
-    if not messages:
-        return
-
-    messages.sort(
-        key=lambda m: m.message_id
-    )
-
-    source_text = ""
-
-    for message in messages:
-
-        if message.caption:
-
-            source_text = message.caption
-
-            break
-
-    if not source_text:
-
-        first_message = messages[0]
-
-        user_id = first_message.from_user.id
-
-        pending_media[user_id] = {
-            "messages": messages,
-            "type": "album",
-        }
-
-        asyncio.create_task(
-            wait_for_text(
-                first_message
-            )
+        ai = await get_ai_extra(
+            text,
+            messages,
         )
 
-        return
+    extra, notes = ai
 
     caption = create_caption(
-        source_text
+        text,
+        extra,
     )
 
     price, discount = get_price_info(
-        source_text
+        text,
+        extra,
     )
 
     media = []
@@ -1284,6 +1507,73 @@ async def process_album(
             discount,
         )
 
+    await send_ai_notes(
+        messages[0],
+        notes,
+    )
+
+
+# =========================================================
+# ALBUM
+# =========================================================
+
+async def process_album(
+    group_id,
+    context,
+):
+
+    await asyncio.sleep(
+        ALBUM_WAIT_SECONDS
+    )
+
+    messages = albums.pop(
+        group_id,
+        [],
+    )
+
+    if not messages:
+        return
+
+    messages.sort(
+        key=lambda m: m.message_id
+    )
+
+    source_text = ""
+
+    for message in messages:
+
+        if message.caption:
+
+            source_text = message.caption
+
+            break
+
+    if not source_text:
+
+        first_message = messages[0]
+
+        user_id = first_message.from_user.id
+
+        pending_media[user_id] = {
+            "messages": messages,
+            "type": "album",
+        }
+
+        asyncio.create_task(
+            wait_for_text(
+                first_message,
+                context,
+            )
+        )
+
+        return
+
+    await send_album(
+        messages,
+        source_text,
+        context,
+    )
+
 
 # =========================================================
 # MAIN HANDLER
@@ -1355,113 +1645,11 @@ async def handle_message(
 
             if pending["type"] == "album":
 
-                messages = pending[
-                    "messages"
-                ]
-
-                caption = create_caption(
-                    text
+                await send_album(
+                    pending["messages"],
+                    text,
+                    context,
                 )
-
-                price, discount = get_price_info(
-                    text
-                )
-
-                media = []
-
-                for index, item in enumerate(
-                    messages
-                ):
-
-                    if item.photo:
-
-                        file_id = (
-                            item.photo[-1].file_id
-                        )
-
-                        if index == 0:
-
-                            media.append(
-                                InputMediaPhoto(
-                                    media=file_id,
-                                    caption=caption,
-                                    parse_mode="HTML",
-                                )
-                            )
-
-                        else:
-
-                            media.append(
-                                InputMediaPhoto(
-                                    media=file_id,
-                                )
-                            )
-
-                    elif item.video:
-
-                        file_id = (
-                            item.video.file_id
-                        )
-
-                        if index == 0:
-
-                            media.append(
-                                InputMediaVideo(
-                                    media=file_id,
-                                    caption=caption,
-                                    parse_mode="HTML",
-                                )
-                            )
-
-                        else:
-
-                            media.append(
-                                InputMediaVideo(
-                                    media=file_id,
-                                )
-                            )
-
-                sent_messages = []
-
-                for start in range(
-                    0,
-                    len(media),
-                    10,
-                ):
-
-                    chunk = media[
-                        start:start + 10
-                    ]
-
-                    result = await messages[0].reply_media_group(
-                        media=chunk
-                    )
-
-                    sent_messages.extend(
-                        result
-                    )
-
-                if (
-                    sent_messages
-                    and price is not None
-                ):
-
-                    first_sent = sent_messages[0]
-
-                    save_album_caption(
-                        context,
-                        first_sent.chat_id,
-                        first_sent.message_id,
-                        caption,
-                    )
-
-                    await send_album_controls(
-                        context,
-                        first_sent.chat_id,
-                        first_sent.message_id,
-                        price,
-                        discount,
-                    )
 
                 return
 
@@ -1545,7 +1733,8 @@ async def handle_message(
 
         asyncio.create_task(
             wait_for_text(
-                message
+                message,
+                context,
             )
         )
 
@@ -1573,7 +1762,8 @@ async def handle_message(
 
         asyncio.create_task(
             wait_for_text(
-                message
+                message,
+                context,
             )
         )
 
@@ -1590,6 +1780,18 @@ def main():
 
         raise ValueError(
             "BOT_TOKEN is not set"
+        )
+
+    if AI_ENABLED:
+
+        logging.info(
+            "AI Vision: увімкнено"
+        )
+
+    else:
+
+        logging.info(
+            "AI Vision: вимкнено (немає ANTHROPIC_API_KEY або AI_VISION=0)"
         )
 
     application = (
