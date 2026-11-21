@@ -60,7 +60,8 @@ Numbers: plain numbers, dot as decimal separator, no thousands separators ("1.25
 
 DISCOUNT: discount_percent only if a percentage is printed (for example "-30%"). Do not calculate it.
 CURRENCY: ISO code from the symbol/text (EUR, USD, GBP, PLN, UAH...), null if not visible.
-SIZES: only values printed on a size label or tag, for example ["38"], ["M"], ["36","37"]. If the tag shows several size systems, return the EU values. Never estimate a size from how the item looks.
+SIZES: you may read visible size labels, but the Telegram post will use sizes from accompanying text only; photo sizes are not used.
+CATEGORY: identify only if clearly shown by the product itself. Return "shoe" for footwear, "bag" for handbags/bags, "other" for other products, or "unknown" if unclear.
 MODEL: product/model name only if it is legible, otherwise null.
 WARNINGS: short notes in Ukrainian about anything that lowers reliability (blurry tag, several prices, partly hidden text). Empty list if none.
 
@@ -80,6 +81,10 @@ PRODUCT_TOOL = {
                 "enum": ["high", "low", "none"],
             },
             "model_name": {"type": ["string", "null"]},
+            "product_category": {
+                "type": "string",
+                "enum": ["shoe", "bag", "other", "unknown"],
+            },
             "price_status": {
                 "type": "string",
                 "enum": ["clear", "unclear", "ambiguous", "not_found"],
@@ -108,6 +113,7 @@ PRODUCT_TOOL = {
         "required": [
             "brand",
             "brand_confidence",
+            "product_category",
             "price_status",
             "price_current",
             "price_original",
@@ -481,18 +487,13 @@ def resolve_ai_fields(text_fields, ai):
                 "⚠️ Бренд на фото не визначено."
             )
 
-    # -----------------------------------------------------
-    # Розміри
-    # -----------------------------------------------------
+    # Розміри з фото не додаємо: у підписі залишаються лише розміри з тексту.
 
-    if not text_fields.get("sizes"):
-
-        sizes = clean_sizes(ai.get("sizes"))
-
-        if sizes:
-
-            extra["sizes"] = sizes
-            used.append(f"розміри {sizes}")
+    # Категорія з фото для автоформули.
+    category = ai.get("product_category")
+    if category in ("shoe", "bag"):
+        extra["category"] = category
+        used.append("категорія: взуття" if category == "shoe" else "категорія: сумка")
 
     # -----------------------------------------------------
     # Ціна
@@ -552,20 +553,10 @@ def resolve_ai_fields(text_fields, ai):
 
     if price_ok:
 
+        # % знижки застосовуємо лише якщо він надрукований на бірці.
+        # Full price та outlet price без надрукованого % не трактуємо як знижку.
         tag_discount = printed
         computed = False
-
-        if (
-            tag_discount is None
-            and original is not None
-            and original > current
-        ):
-
-            tag_discount = _to_percent(
-                (1 - current / original) * 100
-            )
-
-            computed = tag_discount is not None
 
         # ---------------------------------------------
         # Ціни в тексті немає - беремо з фото
@@ -579,7 +570,7 @@ def resolve_ai_fields(text_fields, ai):
                 else tag_discount
             )
 
-            if original is not None:
+            if discount is not None and original is not None:
 
                 base = original
 
