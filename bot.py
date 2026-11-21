@@ -33,10 +33,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+# httpx пише в логи повні адреси запитів разом із токеном бота - вимикаємо
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # Показується в /aicheck, щоб бачити, яка версія коду реально запущена
-BOT_VERSION = "ai-4"
+BOT_VERSION = "ai-6"
 
 ALLOWED_USERS = [
     493563129
