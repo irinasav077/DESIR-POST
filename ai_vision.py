@@ -259,6 +259,10 @@ async def analyze_photos(messages):
     чи не зміг прочитати фото. Ті самі фото повторно не аналізуються.
     """
 
+    global LAST_ERROR
+
+    LAST_ERROR = ""
+
     if not AI_ENABLED:
         return None
 
@@ -296,13 +300,14 @@ async def analyze_photos(messages):
             images.append(data)
 
         if not images:
+
+            LAST_ERROR = "фото завелике для AI"
+
             return None
 
         result = await _ask_claude(images)
 
     except Exception as error:
-
-        global LAST_ERROR
 
         LAST_ERROR = (
             f"{type(error).__name__}: {str(error)[:150]}"
@@ -315,6 +320,9 @@ async def analyze_photos(messages):
         return None
 
     if result is None:
+
+        LAST_ERROR = "AI повернув порожню відповідь"
+
         return None
 
     _cache[key] = result
@@ -323,6 +331,40 @@ async def analyze_photos(messages):
         _cache.popitem(last=False)
 
     return result
+
+
+async def self_check():
+    """Для команди /aicheck: перевіряє ключ, бібліотеку, баланс і модель."""
+
+    if os.environ.get("AI_VISION", "1") == "0":
+        return "❌ AI вимкнено змінною AI_VISION=0."
+
+    if not ANTHROPIC_API_KEY:
+        return "❌ Змінну ANTHROPIC_API_KEY на хостингу не знайдено."
+
+    try:
+        client = _get_client()
+    except Exception as error:
+        return f"❌ Бібліотека anthropic не встановлена: {type(error).__name__}"
+
+    try:
+
+        await client.messages.create(
+            model=AI_MODEL,
+            max_tokens=16,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Відповідай одним словом: ок",
+                }
+            ],
+        )
+
+    except Exception as error:
+
+        return f"❌ {type(error).__name__}: {str(error)[:300]}"
+
+    return f"✅ AI працює. Модель: {AI_MODEL}"
 
 
 # =========================================================
