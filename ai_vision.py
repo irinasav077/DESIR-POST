@@ -225,15 +225,14 @@ async def _ask_claude(images):
         }
     )
 
-    response = await _get_client().messages.create(
+    # Sonnet 5.5 не підтримує примусовий tool_choice (тільки "auto"),
+    # тому просимо викликати інструмент у промпті та перевіряємо відповідь.
+    request = dict(
         model=AI_MODEL,
-        max_tokens=1000,
+        max_tokens=2000,
         system=SYSTEM_PROMPT,
         tools=[PRODUCT_TOOL],
-        tool_choice={
-            "type": "tool",
-            "name": "report_product",
-        },
+        tool_choice={"type": "auto"},
         messages=[
             {
                 "role": "user",
@@ -242,13 +241,24 @@ async def _ask_claude(images):
         ],
     )
 
-    for block in response.content:
+    # Для читання цінника міркування наперед не потрібне:
+    # найнижчий рівень - швидше та дешевше (лише для Sonnet 5.5)
+    if "sonnet-5-5" in AI_MODEL:
+        request["thinking"] = {"type": "between_tools"}
 
-        if (
-            getattr(block, "type", None) == "tool_use"
-            and block.name == "report_product"
-        ):
-            return dict(block.input)
+    for _attempt in range(2):
+
+        response = await _get_client().messages.create(
+            **request
+        )
+
+        for block in response.content:
+
+            if (
+                getattr(block, "type", None) == "tool_use"
+                and block.name == "report_product"
+            ):
+                return dict(block.input)
 
     return None
 
