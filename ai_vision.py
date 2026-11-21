@@ -241,11 +241,6 @@ async def _ask_claude(images):
         ],
     )
 
-    # Для читання цінника міркування наперед не потрібне:
-    # найнижчий рівень - швидше та дешевше (лише для Sonnet 5.5)
-    if "sonnet-5-5" in AI_MODEL:
-        request["thinking"] = {"type": "between_tools"}
-
     for _attempt in range(2):
 
         response = await _get_client().messages.create(
