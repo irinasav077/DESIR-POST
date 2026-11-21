@@ -436,12 +436,46 @@ def normalize_sizes(text):
 
 
 # =========================================================
+# PRODUCT CATEGORY
+# =========================================================
+
+def detect_category(text, extra=None):
+    """Returns 'shoe', 'bag', or 'other/unknown'. AI photo category supplements text."""
+    value = (text or "").lower()
+    if re.search(r"\b(boots?|sneakers?|shoes?|sandals?|loafers?|heels?|ballet flats?|stivaletti|scarpe|sandal|stivali|мюлі|кросівки|взуття)\b", value):
+        return "shoe"
+    if re.search(r"\b(bags?|handbags?|totes?|clutches?|purses?|borsa|sac|bag|сумк[аи])\b", value):
+        return "bag"
+    if extra:
+        category = extra.get("category")
+        if category in ("shoe", "bag"):
+            return category
+    return "other"
+
+
+# =========================================================
+# PRODUCT CATEGORY
+# =========================================================
+
+def detect_category(text, extra=None):
+    value = (text or "").lower()
+    if re.search(r"\b(boots?|sneakers?|shoes?|sandals?|loafers?|heels?|ballet flats?|stivaletti|scarpe|stivali|кросівки|взуття|мюлі)\b", value):
+        return "shoe"
+    if re.search(r"\b(bags?|handbags?|totes?|clutches?|purses?|borsa|sac|сумк[аи])\b", value):
+        return "bag"
+    if extra and extra.get("category") in ("shoe", "bag"):
+        return extra["category"]
+    return "other"
+
+
+# =========================================================
 # AUTO PRICE
 # =========================================================
 
 def calculate_auto_price(
     price,
     discount,
+    category="other",
 ):
 
     if discount is not None:
@@ -459,13 +493,13 @@ def calculate_auto_price(
 
     if price <= 1000:
 
-        return round(
-            price + 100
-        )
+        if category == "bag":
+            return round(price + 150)
 
-    return round(
-        price * 1.15
-    )
+        # Взуття +100€. Для інших категорій зберігаємо старе правило +100€.
+        return round(price + 100)
+
+    return round(price * 1.15)
 
 
 # =========================================================
@@ -476,6 +510,7 @@ def price_keyboard(
     price,
     discount,
     album_message_id=None,
+    category="other",
 ):
 
     discount_value = (
@@ -501,7 +536,7 @@ def price_keyboard(
             return (
                 f"price|{action}|"
                 f"{price_value}|"
-                f"{discount_value}"
+                f"{discount_value}|{category}"
             )
 
     else:
@@ -512,7 +547,7 @@ def price_keyboard(
                 f"album|{action}|"
                 f"{album_message_id}|"
                 f"{price_value}|"
-                f"{discount_value}"
+                f"{discount_value}|{category}"
             )
 
     return InlineKeyboardMarkup(
@@ -582,8 +617,6 @@ def collect_fields(
                 brand,
             )
 
-        if not sizes and extra.get("sizes"):
-            sizes = extra["sizes"]
 
     return price, discount, brand, sizes
 
@@ -612,9 +645,11 @@ def create_caption(
 
         brand = "brand"
 
+    category = detect_category(text, extra)
     new_price = calculate_auto_price(
         price,
         discount,
+        category,
     )
 
     if discount is not None:
@@ -684,7 +719,7 @@ async def get_ai_extra(
         text
     )
 
-    if brand and price is not None:
+    if brand and price is not None and detect_category(text) in ("shoe", "bag"):
         return None, []
 
     ai_data = await analyze_photos(
@@ -814,6 +849,7 @@ def calculate_button_price(
     action,
     price,
     discount,
+    category="other",
 ):
 
     if action == "auto":
@@ -821,6 +857,7 @@ def calculate_button_price(
         return calculate_auto_price(
             price,
             discount,
+            category,
         )
 
     if action == "100":
@@ -884,7 +921,7 @@ async def handle_price_button(
 
     if parts[0] == "price":
 
-        if len(parts) != 4:
+        if len(parts) not in (4, 5):
 
             await query.answer(
                 "Помилка даних кнопки."
@@ -924,10 +961,12 @@ async def handle_price_button(
 
                 discount = None
 
+        category = parts[4] if len(parts) >= 5 else "other"
         new_price = calculate_button_price(
             action,
             price,
             discount,
+            category,
         )
 
         if new_price is None:
@@ -958,6 +997,7 @@ async def handle_price_button(
                     reply_markup=price_keyboard(
                         price,
                         discount,
+                        category=category,
                     ),
                 )
 
@@ -992,6 +1032,7 @@ async def handle_price_button(
                     reply_markup=price_keyboard(
                         price,
                         discount,
+                        category=category,
                     ),
                 )
 
@@ -1023,7 +1064,7 @@ async def handle_price_button(
 
     if parts[0] == "album":
 
-        if len(parts) != 5:
+        if len(parts) not in (5, 6):
 
             await query.answer(
                 "Помилка даних альбому."
@@ -1076,10 +1117,12 @@ async def handle_price_button(
 
                 discount = None
 
+        category = parts[4] if len(parts) == 5 else "other"
         new_price = calculate_button_price(
             action,
             price,
             discount,
+            category,
         )
 
         if new_price is None:
@@ -1181,6 +1224,7 @@ async def send_photo(
         keyboard = price_keyboard(
             price,
             discount,
+            category=detect_category(text, extra),
         )
 
     await message.reply_photo(
@@ -1220,6 +1264,7 @@ async def send_video(
         keyboard = price_keyboard(
             price,
             discount,
+            category=detect_category(text, extra),
         )
 
     await message.reply_video(
@@ -1387,6 +1432,7 @@ async def send_album_controls(
     target_message_id,
     price,
     discount,
+    category="other",
 ):
 
     await context.bot.send_message(
@@ -1396,6 +1442,7 @@ async def send_album_controls(
             price,
             discount,
             album_message_id=target_message_id,
+            category=category,
         ),
     )
 
@@ -1527,6 +1574,7 @@ async def send_album(
             first_sent.message_id,
             price,
             discount,
+            category=detect_category(text, extra),
         )
 
     await send_ai_notes(
