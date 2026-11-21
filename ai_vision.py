@@ -35,6 +35,9 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _cache = OrderedDict()
 _client = None
 
+# Остання помилка AI (коротко) - бот показує її в повідомленні
+LAST_ERROR = ""
+
 
 # =========================================================
 # PROMPT + SCHEMA
@@ -299,8 +302,14 @@ async def analyze_photos(messages):
 
     except Exception as error:
 
+        global LAST_ERROR
+
+        LAST_ERROR = (
+            f"{type(error).__name__}: {str(error)[:150]}"
+        )
+
         logger.error(
-            f"AI vision error: {type(error).__name__}: {error}"
+            f"AI vision error: {LAST_ERROR}"
         )
 
         return None
