@@ -42,6 +42,9 @@ ALLOWED_USERS = [
 PENDING_WAIT_SECONDS = 5
 ALBUM_WAIT_SECONDS = 2
 
+# Додатковий час, який текст чекає, поки зберується альбом
+ALBUM_TEXT_GRACE = 0.7
+
 # Як AI називає бренд -> як ти пишеш хештег. Додавай свої.
 BRAND_ALIASES = {
     "saintlaurent": "ysl",
@@ -196,9 +199,13 @@ def find_brand(text):
             # використовуємо саме її
             if text_without_hashtags:
 
-                return clean_brand(
+                cleaned_brand = clean_brand(
                     text_without_hashtags
                 )
+
+                # Якщо там лише емодзі / знаки - беремо хештег
+                if cleaned_brand:
+                    return cleaned_brand
 
             # Якщо є тільки хештег —
             # використовуємо його
@@ -1607,6 +1614,17 @@ async def handle_message(
     # =====================================================
 
     if message.text:
+
+        # Пересланий пост: текст може прийти раніше, ніж альбом
+        # встигне зібратися. Даємо альбому завершитись.
+        if (
+            not pending_media.get(user_id)
+            and albums
+        ):
+
+            await asyncio.sleep(
+                ALBUM_WAIT_SECONDS + ALBUM_TEXT_GRACE
+            )
 
         pending = pending_media.get(
             user_id
