@@ -20,6 +20,7 @@ from telegram.ext import (
     filters,
 )
 
+import ai_vision
 from ai_vision import (
     AI_ENABLED,
     analyze_photos,
@@ -678,9 +679,16 @@ async def get_ai_extra(
 
     if ai_data is None:
 
-        return None, [
+        reason = ai_vision.LAST_ERROR
+
+        note = (
             "⚠️ AI не зміг прочитати фото — використано лише текст."
-        ]
+        )
+
+        if reason:
+            note += f"\nПричина: {reason}"
+
+        return None, [note]
 
     return resolve_ai_fields(
         {
