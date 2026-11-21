@@ -14,6 +14,7 @@ from telegram import (
 
 from telegram.ext import (
     Application,
+    CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     ContextTypes,
@@ -33,6 +34,9 @@ logging.basicConfig(
 )
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+# Показується в /aicheck, щоб бачити, яка версія коду реально запущена
+BOT_VERSION = "ai-4"
 
 ALLOWED_USERS = [
     493563129
@@ -1797,6 +1801,30 @@ async def handle_message(
 
 
 # =========================================================
+# /aicheck - перевірка AI
+# =========================================================
+
+async def handle_aicheck(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    message = update.message
+
+    if not message:
+        return
+
+    if message.from_user.id not in ALLOWED_USERS:
+        return
+
+    result = await ai_vision.self_check()
+
+    await message.reply_text(
+        f"Версія бота: {BOT_VERSION}\n{result}"
+    )
+
+
+# =========================================================
 # START
 # =========================================================
 
@@ -1835,6 +1863,13 @@ def main():
         CallbackQueryHandler(
             handle_price_button,
             pattern=r"^(price|album)\|",
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "aicheck",
+            handle_aicheck,
         )
     )
 
